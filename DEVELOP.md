@@ -32,3 +32,20 @@
 - `requirements.txt`
 - `README.md`
 - `DEVELOP.md`
+
+---
+
+## Шаг 2: Модуль конфигурации (2026-05-28)
+
+### Что сделано:
+- Создан `config.py` — центральный модуль конфигурации:
+  - Загрузка переменных из `.env` через `python-dotenv`
+  - Константы Telegram: `TELEGRAM_BOT_TOKEN`
+  - Константы OCR.space: `OCR_API_KEY`, `OCR_API_URL`, `OCR_LANGUAGE=pol`, `OCR_ENGINE=2`
+  - Константы Google Sheets: `GOOGLE_SPREADSHEET_ID`, `GOOGLE_CREDENTIALS_FILE`, `SPREADSHEET_NAME`
+  - Дефолтные значения: `DEFAULT_TAX_PERCENT=5`, `DEFAULT_MARGIN_PERCENT=40`
+  - Заголовки таблицы `SHEET_HEADERS` (10 столбцов)
+  - Функция `validate_config()` — проверяет наличие всех обязательных переменных и файла credentials
+
+### Файлы:
+- `config.py`
