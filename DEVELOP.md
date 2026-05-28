@@ -49,3 +49,21 @@
 
 ### Файлы:
 - `config.py`
+
+---
+
+## Шаг 3: OCR-сервис (2026-05-28)
+
+### Что сделано:
+- Создан `ocr_service.py` — модуль работы с OCR.space API:
+  - `ocr_from_file(file_path)` — распознавание из файла на диске
+  - `ocr_from_bytes(file_bytes, filename)` — распознавание из байтов (для Telegram)
+  - Отправка изображений через `base64Image` (меньше проблем с encoding)
+  - Отправка PDF через `multipart/form-data` (требуется для PDF)
+  - Параметры OCR: `language=pol`, `isTable=true`, `scale=true`, `OCREngine=2`, `detectOrientation=true`
+  - Парсинг ответа: поддержка многостраничных PDF, объединение текста со всех страниц
+  - Обработка ошибок: HTTP-ошибки, ошибки API, пустой текст, некорректные exit-коды
+  - Таймаут запроса: 120 секунд (для больших файлов)
+
+### Файлы:
+- `ocr_service.py`
