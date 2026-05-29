@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  faktura_bot:
+    build: .
+    container_name: faktura_bot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      # Прокидываем .env и credentials для работы API
+      - ./.env:/app/.env
+      - ./credentials.json:/app/credentials.json
+      # Монтируем файл настроек пользователей, чтобы они сохранялись при перезапуске
+      - ./user_settings.json:/app/user_settings.json
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
