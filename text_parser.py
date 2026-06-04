@@ -157,7 +157,6 @@ def _extract_invoice_number(text: str) -> str:
 
     Поддерживаемые форматы:
     - Faktura VAT nr FV/2024/001
-    - Faktura nr FV 1/2015
     - Faktura nr: 123/2024
     - FA-001/2024
     - FV 2024/001
@@ -169,12 +168,14 @@ def _extract_invoice_number(text: str) -> str:
     normalized = re.sub(r'\s{2,}', ' ', normalized)
 
     patterns = [
+        # Поиск nr после Faktura (может разделяться другими словами типа VAT, Sprzedawca:)
+        r"[Ff]aktura.*?\bnr\s*[:\.]?\s*([\w/\-]+(?:[\s]+[\w/\-]+)*)",
         # "Faktura (VAT) nr FV 1/2015" или "Faktura nr: 123/2024"
         # Захватываем всё после "nr" до конца строки или двойного пробела
         r"[Ff]aktura\s+(?:VAT\s+)?(?:[Nn]r\.?\s*:?\s*)([\w/\-]+(?:[\s]+[\w/\-]+)*)",
         r"[Nn]r\.?\s+faktury[:\s]+([\w/\-]+(?:[\s]+[\w/\-]+)*)",
         # "FV 1/2015" или "FV/2024/001"
-        r"((?:FV|FA)[/\-\s]*\d[\w/\-\s]*\d)",
+        r"\b((?:FV|FA)[/\-\s]*\d[\w/\-\s]*\d)\b",
         r"[Ff]aktura[:\s]+([\w/\-]+(?:[\s]+[\w/\-]+)*)",
     ]
 
@@ -200,12 +201,21 @@ def _extract_items(text: str) -> list:
     Извлекает товары из текста фактуры.
 
     Стратегия:
-    1. Ищем таблицу товаров по заголовкам (Nazwa, Ilość, Cena, itd.)
-    2. Парсим строки таблицы
-    3. Если таблица не найдена — пробуем более гибкий подход
+    1. Пробуем интеллектуальный парсер на основе кодов товаров и табуляции (для сложных макетов)
+    2. Если не сработало, используем стандартный табличный парсер
+    3. Если таблица не найдена — пробуем гибкий построчный поиск
     """
-    items = []
+    # Сначала пробуем интеллектуальный парсер
+    try:
+        items = _parse_table_code_and_tab_aware(text)
+        if items:
+            logger.info(f"Успешно извлечено {len(items)} товаров с помощью интеллектуального парсера.")
+            return items
+    except Exception as e:
+        logger.error(f"Ошибка интеллектуального парсинга товаров: {e}")
 
+    # Стандартный фолбек
+    items = []
     lines = text.split("\n")
     lines = [line.strip() for line in lines if line.strip()]
 
@@ -406,8 +416,9 @@ def _extract_numbers(text: str) -> list:
     - 1 234,50 (с пробелом как разделителем тысяч)
     """
     # Находим числа в различных форматах
-    # Порядок: сначала числа с десятичной частью (до 4 десятичных знаков), потом целые
-    pattern = r"(\d[\d\s]*[,\.]\d{1,4}|\d+)"
+    # Порядок: сначала числа с десятичной частью (до 4 десятичных знаков), потом целые.
+    # Используем [\\d ]* вместо [\\d\\s]* чтобы предотвратить захват табов \\t между колонками.
+    pattern = r"(\d[\d ]*[,\.]\d{1,4}|\d+)"
     raw_matches = re.findall(pattern, text)
 
     numbers = []
@@ -621,3 +632,298 @@ def calculate_new_prices(
         )
 
     return results
+
+
+def _parse_table_code_and_tab_aware(text: str) -> list:
+    """
+    Интеллектуальный парсинг таблицы товаров на основе кодов и табуляции.
+    Идеально подходит для фактур с многострочными названиями и сложной разметкой.
+    """
+    lines = text.split("\n")
+    cleaned_lines = [l.strip() for l in lines if l.strip()]
+
+    # Ищем начало таблицы товаров
+    start_idx = 0
+    for idx, line in enumerate(cleaned_lines):
+        line_lower = line.lower()
+        if "nazwa towaru" in line_lower or ("kod" in line_lower and "cena" in line_lower):
+            start_idx = idx + 1
+            break
+
+    if start_idx == 0 or start_idx >= len(cleaned_lines):
+        return []
+
+    end_keywords = ["razem", "suma", "do zapłaty", "do zaplaty", "łącznie", "lacznie", "ogółem", "ogolem"]
+
+    raw_items = []
+    
+    # Шаблон кода товара: 2-10 заглавных букв, затем дефис и продолжение кода (не цифры в начале!)
+    code_pattern = re.compile(r"\b[A-ZÜÄÖĆŁŚŹŻ]{2,10}-[\w\-]+\b")
+    unit_pattern = re.compile(r"(\d[\d ]*[,\.]\d{1,4}|\d+)\s*(tsz|mb|szt|kpl|kg|op|opak|t52)", re.IGNORECASE)
+
+    # Проверяем наличие кодов в таблице
+    has_codes = False
+    for line in cleaned_lines[start_idx:]:
+        line_lower = line.lower()
+        if any(ek in line_lower for ek in end_keywords):
+            break
+        parts = [p.strip() for p in re.split(r"\t|\|", line) if p.strip()]
+        for part in parts:
+            match = code_pattern.search(part)
+            if match:
+                code_str = match.group(0)
+                if f"({code_str}" not in part and f"{code_str})" not in part:
+                    if "ZS-" not in part and "FS-" not in part:
+                        has_codes = True
+                        break
+        if has_codes:
+            break
+            
+    if not has_codes:
+        return []
+
+    for idx in range(start_idx, len(cleaned_lines)):
+        line = cleaned_lines[idx]
+        line_lower = line.lower()
+        if any(ek in line_lower for ek in end_keywords):
+            break
+
+        # Игнорируем футеры и служебные строки
+        if "comarch erp" in line_lower or "strona:" in line_lower or "wersja" in line_lower:
+            continue
+
+        # Разделяем по табуляции или вертикальной черте |
+        parts = [p.strip() for p in re.split(r"\t|\|", line) if p.strip()]
+        if not parts:
+            continue
+
+        # Проверяем, начинается ли строка с порядкового номера (Lp. / №)
+        starts_with_lp = False
+        if parts[0].isdigit():
+            val = int(parts[0])
+            if 1 <= val <= 100:
+                starts_with_lp = True
+
+        # Проверяем наличие кода товара в колонках
+        code_match = None
+        code_part_idx = -1
+        for p_idx, part in enumerate(parts):
+            match = code_pattern.search(part)
+            if match:
+                code_str = match.group(0)
+                # Игнорируем коды в круглых скобках (это часть описания)
+                if f"({code_str}" in part or f"{code_str})" in part:
+                    continue
+                if "ZS-" not in part and "FS-" not in part:
+                    code_match = code_str
+                    code_part_idx = p_idx
+                    break
+
+        # Определяем временные числа из правой части строки для проверки на новый товар
+        temp_name_idx = code_part_idx if code_part_idx != -1 else (1 if starts_with_lp and len(parts) > 1 else 0)
+        temp_data_parts = parts[temp_name_idx + 1:]
+        temp_numbers = []
+        for dp in temp_data_parts:
+            if "%" in dp:
+                continue
+            col_nums = re.findall(r"(\d[\d ]*[,\.]\d{1,4}|\d+)", dp)
+            if col_nums:
+                val = float(col_nums[0].replace(" ", "").replace(",", "."))
+                if val >= 100000 and val == int(val):
+                    continue
+                temp_numbers.append(val)
+
+        is_new_item = (code_match is not None) or (starts_with_lp and len(temp_numbers) >= 2)
+
+        if is_new_item:
+            # Определяем колонку названия/кода товара
+            name_idx = temp_name_idx
+            name = parts[name_idx]
+            
+            # Удаляем sequence numbers и мусор перед кодом товара
+            if code_match:
+                idx_code = name.find(code_match)
+                if idx_code != -1:
+                    name = name[idx_code:]
+            else:
+                name = re.sub(r"^\s*\d+\s+", "", name)
+
+            data_parts = temp_data_parts
+            
+            # Извлекаем числа из колонок данных
+            numbers = []
+            for dp in data_parts:
+                if "%" in dp:
+                    continue
+                col_nums = re.findall(r"(\d[\d ]*[,\.]\d{1,4}|\d+)", dp)
+                if col_nums:
+                    val = float(col_nums[0].replace(" ", "").replace(",", "."))
+                    if val >= 100000 and val == int(val):
+                        continue
+                    numbers.append(val)
+
+            # Проверяем явное указание количества с единицей измерения
+            qty = None
+            qty_match = unit_pattern.search(line)
+            if qty_match:
+                qty = float(qty_match.group(1).replace(" ", "").replace(",", "."))
+
+            q, p, t = _determine_price_quantity_robust(numbers, qty)
+
+            current_item = {
+                "name": name,
+                "quantity": q,
+                "unit_price": p,
+                "total_price": t,
+                "numbers": numbers,
+                "qty_override": qty
+            }
+            raw_items.append(current_item)
+            
+        elif raw_items:
+            # Это строка-продолжение (описание или перенесённые цены)
+            current_item = raw_items[-1]
+            desc_part = ""
+            for p in parts:
+                if not re.match(r"^\d[\d ]*[,\.]\d{1,4}$|^\d+$", p) and "%" not in p:
+                    desc_part = p
+                    break
+
+            if desc_part:
+                cleaned_desc = _clean_product_name_robust(desc_part)
+                if cleaned_desc:
+                    current_item["name"] = f"{current_item['name']} {cleaned_desc}"
+
+            # Извлекаем числа из остальных колонок
+            extra_numbers = []
+            for p in parts:
+                if p == desc_part or "%" in p:
+                    continue
+                col_nums = re.findall(r"(\d[\d ]*[,\.]\d{1,4}|\d+)", p)
+                if col_nums:
+                    val = float(col_nums[0].replace(" ", "").replace(",", "."))
+                    if val >= 100000 and val == int(val):
+                        continue
+                    extra_numbers.append(val)
+
+            if extra_numbers:
+                current_item["numbers"].extend(extra_numbers)
+                q, p, t = _determine_price_quantity_robust(current_item["numbers"], current_item["qty_override"])
+                current_item["quantity"] = q
+                current_item["unit_price"] = p
+                current_item["total_price"] = t
+
+    # Маппим результаты в InvoiceItem
+    results = []
+    for item in raw_items:
+        # Дополнительно очищаем имя перед сохранением
+        final_name = _clean_product_name_robust(item["name"])
+        # Убираем ведущие цифры Lp., если они склеились с названием
+        final_name = re.sub(r"^\s*\d+\s+", "", final_name)
+        if len(final_name) >= 2:
+            results.append(
+                InvoiceItem(
+                    name=final_name,
+                    unit_price=round(item["unit_price"], 2),
+                    quantity=item["quantity"],
+                    total_price=round(item["total_price"], 2)
+                )
+            )
+            
+    return results
+
+
+def _clean_product_name_robust(text: str) -> str:
+    """Очищает строку от мусорных чисел, процентов и единиц измерения."""
+    cleaned = re.sub(r"^\s*\d+\s*[.|\)]?\s*", "", text)
+    cleaned = re.sub(r"\b\d{1,2}\s*%\s*", "", cleaned)
+    cleaned = re.sub(r"\bzw\.?\b", "", cleaned, flags=re.IGNORECASE)
+    units = ["szt", "szt.", "tsz.", "tsz", "sztuk", "kpl", "kpl.", "komplet", "kg", "mb", "op", "opak", "t52"]
+    for unit in units:
+        cleaned = re.sub(rf"\b{re.escape(unit)}\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\d[\d ]*[,\.]\d{1,4}", "", cleaned)
+    cleaned = re.sub(r"(?<![\w\-])\d+(?![\w\-])", "", cleaned)
+    cleaned = re.sub(r"\(\s*\)", "", cleaned)
+    cleaned = re.sub(r"\[\s*\]", "", cleaned)
+    cleaned = re.sub(r"[|│┃]", " ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip(" .\t-")
+
+
+def _determine_price_quantity_robust(numbers: list, known_qty: float = None) -> tuple:
+    """Вычисляет цену, количество и сумму по списку чисел."""
+    if len(numbers) == 0:
+        return known_qty if known_qty is not None else 1.0, 0.0, 0.0
+        
+    if known_qty is not None:
+        best_price = None
+        best_total = None
+        best_diff = float("inf")
+        
+        for i, n in enumerate(numbers):
+            if n <= 0: continue
+            expected_total = known_qty * n
+            for j, other in enumerate(numbers):
+                if i == j: continue
+                diff = abs(expected_total - other)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_price = n
+                    best_total = other
+                    
+        if best_price is not None and best_diff < best_total * 0.15:
+            return known_qty, best_price, best_total
+            
+        other_nums = [n for n in numbers if n != known_qty]
+        if len(other_nums) >= 1:
+            p = other_nums[0]
+            return known_qty, p, round(known_qty * p, 2)
+        return known_qty, numbers[0], round(known_qty * numbers[0], 2)
+
+    # Если количество не задано
+    if len(numbers) == 1:
+        return 1.0, numbers[0], numbers[0]
+    if len(numbers) == 2:
+        n1, n2 = numbers[0], numbers[1]
+        if abs(n1 - n2) < (n1 * 0.01):
+            return 1.0, n1, n2
+        if n1 < n2 or n1 < 1.0:
+            return n1, n2, round(n1 * n2, 2)
+        else:
+            return n2, n1, round(n1 * n2, 2)
+
+    best = None
+    best_diff = float("inf")
+    
+    for i in range(len(numbers)):
+        for j in range(len(numbers)):
+            if i == j: continue
+            for k in range(len(numbers)):
+                if k == i or k == j: continue
+                q, p, t = numbers[i], numbers[j], numbers[k]
+                if q <= 0 or p <= 0 or t <= 0: continue
+                
+                expected = q * p
+                diff = abs(expected - t)
+                
+                if diff > (t * 0.15):
+                    continue
+                
+                penalty = 0
+                if q != int(q) and q >= 1.0:
+                    penalty += 10.0
+                
+                if i < j < k:
+                    diff -= 5.0
+                
+                diff += penalty
+                
+                if diff < best_diff:
+                    best_diff = diff
+                    best = (q, p, t)
+
+    if best:
+        return best
+        
+    return numbers[0], numbers[1], numbers[2]
+
