@@ -256,20 +256,52 @@ async def save_spreadsheet_handler(update: Update, context: ContextTypes.DEFAULT
     user_id = update.effective_user.id
     text = update.message.text.strip()
     
+    # Если пользователь нажал кнопку из главного меню — выходим из диалога
+    menu_buttons = ["📸 Загрузить фактуру", "📊 Открыть таблицу", "⚙️ Настройки", "❓ Помощь"]
+    if text in menu_buttons:
+        await update.message.reply_text(
+            "ℹ️ Привязка таблицы отменена.",
+            reply_markup=get_main_keyboard()
+        )
+        # Перенаправляем на соответствующий обработчик
+        await text_message_router(update, context)
+        return ConversationHandler.END
+    
+    # Простая проверка что текст похож на ссылку или ID
+    if not ("docs.google.com" in text or len(text) > 20):
+        await update.message.reply_text(
+            "❌ Это не похоже на ссылку Google Таблицы.\n\n"
+            "Пожалуйста, отправьте полную ссылку на таблицу из адресной строки браузера "
+            "(например: `https://docs.google.com/spreadsheets/d/...`).\n\n"
+            "Для отмены нажмите любую кнопку меню.",
+            parse_mode="Markdown",
+            reply_markup=get_main_keyboard()
+        )
+        return AWAITING_SPREADSHEET
+    
     # Показываем статус проверки
     status_msg = await update.message.reply_text(
-        "⏳ Проверяю доступ к вашей таблице...",
-        reply_markup=get_main_keyboard()
+        "⏳ Проверяю доступ к вашей таблице..."
     )
     
     res = sheets_service.verify_and_setup_spreadsheet(text)
     
     if not res["success"]:
-        await status_msg.edit_text(
-            f"❌ **Не удалось получить доступ к таблице!**\n\n"
-            f"Описание ошибки:\n`{res['error']}`\n\n"
-            "Пожалуйста, убедитесь, что вы выдали права **Редактора (Editor)** для email бота и прислали верную ссылку, после чего попробуйте отправить ссылку снова."
-        )
+        try:
+            await status_msg.edit_text(
+                f"❌ **Не удалось получить доступ к таблице!**\n\n"
+                f"Описание ошибки:\n`{res['error']}`\n\n"
+                "Пожалуйста, убедитесь, что вы выдали права **Редактора (Editor)** для email бота и прислали верную ссылку, после чего попробуйте отправить ссылку снова.",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            await update.message.reply_text(
+                f"❌ **Не удалось получить доступ к таблице!**\n\n"
+                f"Описание ошибки:\n`{res['error']}`\n\n"
+                "Попробуйте отправить ссылку снова.",
+                parse_mode="Markdown",
+                reply_markup=get_main_keyboard()
+            )
         return AWAITING_SPREADSHEET
         
     # Сохраняем настройки
@@ -279,11 +311,19 @@ async def save_spreadsheet_handler(update: Update, context: ContextTypes.DEFAULT
         res["spreadsheet_url"]
     )
     
-    await status_msg.edit_text(
-        "✅ **Таблица успешно привязана к вашему аккаунту!**\n\n"
-        "Теперь все распознанные товары из ваших фактур будут добавляться именно в неё.",
-        reply_markup=get_main_keyboard()
-    )
+    try:
+        await status_msg.edit_text(
+            "✅ **Таблица успешно привязана к вашему аккаунту!**\n\n"
+            "Теперь все распознанные товары из ваших фактур будут добавляться именно в неё.",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        await update.message.reply_text(
+            "✅ **Таблица успешно привязана к вашему аккаунту!**\n\n"
+            "Теперь все распознанные товары из ваших фактур будут добавляться именно в неё.",
+            parse_mode="Markdown",
+            reply_markup=get_main_keyboard()
+        )
     return ConversationHandler.END
 
 
