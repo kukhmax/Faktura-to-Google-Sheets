@@ -466,9 +466,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         preview_text = "\n".join(items_preview)
         
+        seller_name = invoice_data.seller or "(не определен)"
+        
         success_text = (
             "✅ **Фактура успешно обработана!**\n\n"
             f"📄 **Сводка фактуры:**\n"
+            f"• **Продавец (Фирма):** `{seller_name}`\n"
             f"• **Номер:** `{inv_num}`\n"
             f"• **Дата:** `{inv_date}`\n"
             f"• **Всего товаров:** `{len(invoice_data.items)}` шт.\n"
