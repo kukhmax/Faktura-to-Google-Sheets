@@ -178,14 +178,14 @@ def _extract_invoice_number(text: str, seller: str = None) -> str:
             return match.group(1)
 
     patterns = [
+        # Самые точные совпадения (с префиксами FV/FA/FS)
+        r"\b[Nn]r\s+((?:FV|FA|FS)[/\-\s]*[\w/\-]+)",
+        r"\b((?:FV|FA|FS)[/\-\s]*\d[\w/\-\s]*\d)\b",
         # Поиск nr после Faktura с ограничением расстояния, чтобы избежать ложных срабатываний
         r"[Ff]aktura.{0,40}?\bnr\s*[:\.]?\s*([\w/\-]+(?:[\s]+[\w/\-]+)*)",
         # "Faktura (VAT) nr FV 1/2015" или "Faktura nr: 123/2024"
-        # Захватываем всё после "nr" до конца строки или двойного пробела
         r"[Ff]aktura\s+(?:VAT\s+)?(?:[Nn]r\.?\s*:?\s*)([\w/\-]+(?:[\s]+[\w/\-]+)*)",
         r"[Nn]r\.?\s+faktury[:\s]+([\w/\-]+(?:[\s]+[\w/\-]+)*)",
-        # "FV 1/2015", "FV/2024/001", or "FS-192/26/SUR"
-        r"\b((?:FV|FA|FS)[/\-\s]*\d[\w/\-\s]*\d)\b",
         r"[Ff]aktura[:\s]+([\w/\-]+(?:[\s]+[\w/\-]+)*)",
     ]
 
@@ -225,6 +225,16 @@ def _extract_items(text: str, seller: str = "-") -> list:
                 return items
         except Exception as e:
             logger.error(f"Ошибка парсинга Stoklasa: {e}")
+
+    # 1.5 Если продавец NATURAL, используем специализированный парсер
+    if seller and "natural" in seller.lower():
+        try:
+            items = _parse_natural_items(text)
+            if items:
+                logger.info(f"Успешно извлечено {len(items)} товаров с помощью парсера NATURAL.")
+                return items
+        except Exception as e:
+            logger.error(f"Ошибка парсинга NATURAL: {e}")
 
     # 2. Пробуем интеллектуальный парсер
     try:
@@ -959,6 +969,10 @@ def _extract_seller(text: str) -> str:
     if "stoklasa" in text_lower:
         return "Stoklasa"
         
+    # 2. Проверяем на NATURAL
+    if "natural" in text_lower and "walczak" in text_lower:
+        return "NATURAL"
+        
     # 2. Проверяем на GAIA
     if "gaia" in text_lower or "skravki" in text_lower or "542-24-38-603" in text_lower or "5422438603" in text_lower:
         return '"GAIA" Sp. z o.o.'
@@ -978,6 +992,89 @@ def _extract_seller(text: str) -> str:
                 return seller
                 
     return "-"
+
+
+def _parse_natural_items(text: str) -> list:
+    """
+    Специализированный парсер для фактур NATURAL.
+    В фактурах NATURAL столбцы разделены табуляцией, и часто OCR обрезает колонку с количеством 
+    (или она склеивается с единицей измерения, например "15 mb" -> "5mb").
+    Поэтому мы восстанавливаем количество через деление: Wartość netto / Cena netto,
+    либо берем первые 3 числа если колонка количества распозналась отдельно.
+    """
+    lines = text.split("\n")
+    cleaned_lines = [l.strip() for l in lines if l.strip()]
+
+    raw_items = []
+    
+    for line in cleaned_lines:
+        parts = [p.strip() for p in re.split(r"\t|\|", line) if p.strip()]
+        
+        if len(parts) < 3:
+            continue
+            
+        # Проверяем, что первый элемент - это число от 1 до 100 (Lp.)
+        lp_str = parts[0]
+        if not re.match(r"^\d+$", lp_str):
+            continue
+            
+        lp = int(lp_str)
+        if not (1 <= lp <= 100):
+            continue
+            
+        parsed_numbers = []
+        for p in parts:
+            if "%" in p:
+                continue
+            
+            # Извлекаем все чистые числа
+            if re.match(r"^\d[\d ]*[,\.]\d{1,4}$|^\d+$", p):
+                val = float(p.replace(" ", "").replace(",", "."))
+                parsed_numbers.append(val)
+                
+        if len(parsed_numbers) < 3:
+            continue
+            
+        # Убираем lp
+        nums = parsed_numbers[1:]
+        
+        best_qty = None
+        best_p = None
+        best_t = None
+        
+        # 1. Если в массиве есть количество, цена и сумма (например, 15, 14, 210)
+        if len(nums) >= 3:
+            if abs(nums[0] * nums[1] - nums[2]) < 0.05:
+                best_qty = nums[0]
+                best_p = nums[1]
+                best_t = nums[2]
+                
+        # 2. Если количества нет, а только цена и сумма (например, 14, 210)
+        if best_qty is None and len(nums) >= 2:
+            p = nums[0]
+            t = nums[1]
+            if p > 0:
+                calc_qty = t / p
+                if 0.001 <= calc_qty <= 10000:
+                    best_qty = round(calc_qty, 4)
+                    best_p = p
+                    best_t = t
+                    
+        if best_qty is not None:
+            # Название товара - это вторая колонка
+            name = parts[1]
+            name = _clean_product_name_robust(name)
+            
+            raw_items.append(
+                InvoiceItem(
+                    name=name,
+                    quantity=float(best_qty),
+                    unit_price=float(best_p),
+                    total_price=float(best_t)
+                )
+            )
+            
+    return raw_items
 
 
 def _parse_stoklasa_items(text: str) -> list:
