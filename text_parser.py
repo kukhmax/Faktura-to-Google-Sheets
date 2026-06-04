@@ -184,8 +184,8 @@ def _extract_invoice_number(text: str, seller: str = None) -> str:
         # Захватываем всё после "nr" до конца строки или двойного пробела
         r"[Ff]aktura\s+(?:VAT\s+)?(?:[Nn]r\.?\s*:?\s*)([\w/\-]+(?:[\s]+[\w/\-]+)*)",
         r"[Nn]r\.?\s+faktury[:\s]+([\w/\-]+(?:[\s]+[\w/\-]+)*)",
-        # "FV 1/2015" или "FV/2024/001"
-        r"\b((?:FV|FA)[/\-\s]*\d[\w/\-\s]*\d)\b",
+        # "FV 1/2015", "FV/2024/001", or "FS-192/26/SUR"
+        r"\b((?:FV|FA|FS)[/\-\s]*\d[\w/\-\s]*\d)\b",
         r"[Ff]aktura[:\s]+([\w/\-]+(?:[\s]+[\w/\-]+)*)",
     ]
 
@@ -671,7 +671,7 @@ def _parse_table_code_and_tab_aware(text: str) -> list:
             start_idx = idx + 1
             break
 
-    if start_idx == 0 or start_idx >= len(cleaned_lines):
+    if start_idx >= len(cleaned_lines):
         return []
 
     end_keywords = ["razem", "suma", "do zapłaty", "do zaplaty", "łącznie", "lacznie", "ogółem", "ogolem"]
@@ -862,8 +862,8 @@ def _clean_product_name_robust(text: str) -> str:
     units = ["szt", "szt.", "tsz.", "tsz", "sztuk", "kpl", "kpl.", "komplet", "kg", "mb", "op", "opak", "t52"]
     for unit in units:
         cleaned = re.sub(rf"\b{re.escape(unit)}\b", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\d[\d ]*[,\.]\d{1,4}", "", cleaned)
-    cleaned = re.sub(r"(?<![\w\-])\d+(?![\w\-])", "", cleaned)
+    # We do not aggressively strip all numbers here because parts are already separated by tabs,
+    # and stripping numbers destroys valid model numbers like "6158", "2241", etc.
     cleaned = re.sub(r"\(\s*\)", "", cleaned)
     cleaned = re.sub(r"\[\s*\]", "", cleaned)
     cleaned = re.sub(r"[|│┃]", " ", cleaned)
