@@ -40,7 +40,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Состояния ConversationHandler для настроек
-AWAITING_TAX, AWAITING_MARGIN = range(2)
+AWAITING_TAX, AWAITING_MARGIN, AWAITING_SPREADSHEET = range(3)
 
 # Главная Reply-клавиатура
 def get_main_keyboard():
@@ -119,11 +119,14 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     tax = settings_manager.get_tax(user_id)
     margin = settings_manager.get_margin(user_id)
+    url = settings_manager.get_spreadsheet_url(user_id)
+    url_text = f"[Открыть 📈]({url})" if url else "`Не создана/не привязана`"
 
     settings_text = (
         "⚙️ **Ваши текущие настройки:**\n\n"
         f"• **Налог (по дефолту 5%):** `{tax}%`\n"
-        f"• **Маржа (по дефолту 40%):** `{margin}%`\n\n"
+        f"• **Маржа (по дефолту 40%):** `{margin}%`\n"
+        f"• **Google Таблица:** {url_text}\n\n"
         "Эти параметры используются для расчёта розничной цены товара по формуле:\n"
         "`Новая цена = Закупка + (Закупка × Налог%) + (Закупка × Маржа%)`\n\n"
         "Выберите параметр для изменения:"
@@ -133,6 +136,9 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [
             InlineKeyboardButton("💰 Изменить налог", callback_data="edit_tax"),
             InlineKeyboardButton("📈 Изменить маржу", callback_data="edit_margin")
+        ],
+        [
+            InlineKeyboardButton("🔗 Привязать свою таблицу", callback_data="edit_spreadsheet")
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -218,6 +224,67 @@ async def save_margin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             "❌ Некорректный ввод! Пожалуйста, введите положительное число (например, `40` или `35.5`)."
         )
         return AWAITING_MARGIN
+
+
+async def edit_spreadsheet_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inline-кнопка привязки Google Таблицы."""
+    query = update.callback_query
+    await query.answer()
+    
+    email = sheets_service.get_service_account_email()
+    
+    instruction = (
+        "🔗 **Привязка вашей собственной Google Таблицы**\n\n"
+        "Чтобы бот мог записывать товары в вашу личную таблицу (это решит проблему с ограничениями диска бота), выполните следующие действия:\n\n"
+        "1. Создайте **новую** (или откройте имеющуюся) Google Таблицу в своем Google-аккаунте.\n"
+        "2. Нажмите кнопку **Поделиться (Share)** в правом верхнем углу таблицы.\n"
+        "3. Добавьте следующий email сервисного аккаунта бота как **Редактора (Editor)**:\n"
+        f"   `{email}`\n"
+        "4. **Скопируйте ссылку** на эту таблицу (из адресной строки браузера) и **отправьте её мне** в ответном сообщении.\n\n"
+        "Для отмены введите `/cancel` или нажмите любую кнопку меню."
+    )
+    
+    await query.message.reply_text(
+        instruction,
+        parse_mode="Markdown"
+    )
+    return AWAITING_SPREADSHEET
+
+
+async def save_spreadsheet_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Проверяет доступность и сохраняет привязанную таблицу."""
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+    
+    # Показываем статус проверки
+    status_msg = await update.message.reply_text(
+        "⏳ Проверяю доступ к вашей таблице...",
+        reply_markup=get_main_keyboard()
+    )
+    
+    res = sheets_service.verify_and_setup_spreadsheet(text)
+    
+    if not res["success"]:
+        await status_msg.edit_text(
+            f"❌ **Не удалось получить доступ к таблице!**\n\n"
+            f"Описание ошибки:\n`{res['error']}`\n\n"
+            "Пожалуйста, убедитесь, что вы выдали права **Редактора (Editor)** для email бота и прислали верную ссылку, после чего попробуйте отправить ссылку снова."
+        )
+        return AWAITING_SPREADSHEET
+        
+    # Сохраняем настройки
+    settings_manager.set_spreadsheet(
+        user_id,
+        res["spreadsheet_id"],
+        res["spreadsheet_url"]
+    )
+    
+    await status_msg.edit_text(
+        "✅ **Таблица успешно привязана к вашему аккаунту!**\n\n"
+        "Теперь все распознанные товары из ваших фактур будут добавляться именно в неё.",
+        reply_markup=get_main_keyboard()
+    )
+    return ConversationHandler.END
 
 
 async def cancel_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -428,6 +495,7 @@ def main():
         entry_points=[
             CallbackQueryHandler(edit_tax_callback, pattern="^edit_tax$"),
             CallbackQueryHandler(edit_margin_callback, pattern="^edit_margin$"),
+            CallbackQueryHandler(edit_spreadsheet_callback, pattern="^edit_spreadsheet$"),
         ],
         states={
             AWAITING_TAX: [
@@ -435,6 +503,9 @@ def main():
             ],
             AWAITING_MARGIN: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, save_margin_handler)
+            ],
+            AWAITING_SPREADSHEET: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, save_spreadsheet_handler)
             ],
         },
         fallbacks=[

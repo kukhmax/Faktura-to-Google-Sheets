@@ -226,4 +226,23 @@
 - [test_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/test_parser.py) — исправление формул ожидаемых значений в тестах
 - [DEVELOP.md](file:///c:/Users/m-win/Projects/faktura_bot/DEVELOP.md) — этот лог
 
+---
+
+## Шаг 12: Поддержка привязки собственных Google Таблиц для обхода лимитов квоты диска (2026-06-04)
+
+### Что сделано:
+- Диагностирована новая ошибка работы с Google Sheets API: `APIError: [403]: The user's Drive storage quota has been exceeded.`. Она возникает из-за того, что Google установил лимит квоты хранения в 0 байт для новых и существующих сервисных аккаунтов (для борьбы с использованием сервисных аккаунтов как бесплатного облачного хранилища). Бот больше не может самостоятельно создавать файлы таблиц от имени сервисного аккаунта, если квота превышена.
+- Реализован функционал привязки пользовательских Google Таблиц:
+  - В модуль [sheets_service.py](file:///c:/Users/m-win/Projects/faktura_bot/sheets_service.py) добавлены функции `get_service_account_email()` (извлекает email сервисного аккаунта из файла конфигурации для показа пользователю) и `verify_and_setup_spreadsheet(spreadsheet_url_or_id)` (принимает ссылку или ID таблицы, проверяет наличие прав **Editor** для бота и автоматически инициализирует пустую таблицу стандартными заголовками).
+  - В обработчик ошибок записи `append_invoice_to_sheet` в [sheets_service.py](file:///c:/Users/m-win/Projects/faktura_bot/sheets_service.py) добавлена проверка на наличие ошибок с квотой диска (`storage quota`, `storageQuotaExceeded`, `quota has been exceeded`). В случае такой ошибки пользователю возвращается дружелюбный текст с инструкцией, как создать свою таблицу, поделиться ею с ботом и привязать в настройках.
+  - В [bot.py](file:///c:/Users/m-win/Projects/faktura_bot/bot.py) в меню настроек (**⚙️ Настройки**) добавлена inline-кнопка **«🔗 Привязать свою таблицу»**. При её нажатии бот выдает инструкцию и просит отправить ссылку на таблицу. Добавлено новое состояние `AWAITING_SPREADSHEET` в `ConversationHandler`.
+  - После отправки ссылки бот проверяет права доступа через `verify_and_setup_spreadsheet`. Если доступ предоставлен, сохраняет настройки в `user_settings.json` и привязывает таблицу к аккаунту пользователя. При возникновении ошибки выдает понятное сообщение о необходимости выдать права редактора для конкретного email бота.
+- Контейнер Docker успешно пересобран и перезапущен.
+
+### Файлы:
+- [sheets_service.py](file:///c:/Users/m-win/Projects/faktura_bot/sheets_service.py) — функции получения email аккаунта, валидации таблиц и перехвата ошибок квоты
+- [bot.py](file:///c:/Users/m-win/Projects/faktura_bot/bot.py) — интерфейс и логика ConversationHandler для привязки таблиц
+- [DEVELOP.md](file:///c:/Users/m-win/Projects/faktura_bot/DEVELOP.md) — этот лог
+
+
 

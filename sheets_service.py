@@ -8,6 +8,8 @@
 - Добавление данных из фактур в таблицу.
 """
 
+import re
+import json
 import logging
 import gspread
 from google.oauth2.service_account import Credentials
@@ -35,6 +37,80 @@ def get_gspread_client() -> gspread.Client:
     except Exception as e:
         logger.error(f"Ошибка авторизации Google API: {e}")
         raise e
+
+
+def get_service_account_email() -> str:
+    """Возвращает email сервисного аккаунта из файла credentials."""
+    try:
+        with open(config.GOOGLE_CREDENTIALS_FILE) as f:
+            creds = json.load(f)
+            return creds.get("client_email", "")
+    except Exception as e:
+        logger.error(f"Не удалось прочитать client_email из credentials: {e}")
+        return ""
+
+
+def verify_and_setup_spreadsheet(spreadsheet_url_or_id: str) -> dict:
+    """
+    Проверяет доступность таблицы по ссылке или ID,
+    настраивает заголовки, если таблица пустая.
+    
+    Returns:
+        dict: {
+            "success": bool,
+            "spreadsheet_id": str,
+            "spreadsheet_url": str,
+            "error": str | None
+        }
+    """
+    try:
+        # Извлекаем ID из URL или используем как есть
+        spreadsheet_id = spreadsheet_url_or_id
+        if "docs.google.com/spreadsheets" in spreadsheet_url_or_id:
+            match = re.search(r"/d/([a-zA-Z0-9-_]+)", spreadsheet_url_or_id)
+            if match:
+                spreadsheet_id = match.group(1)
+                
+        client = get_gspread_client()
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        sheet = spreadsheet.get_worksheet(0)
+        
+        # Проверяем, есть ли там заголовки, если пустая - дописываем
+        try:
+            values = sheet.get_all_values()
+            if not values or len(values) == 0:
+                sheet.append_row(config.SHEET_HEADERS)
+                sheet.format("A1:J1", {"textFormat": {"bold": True}})
+                logger.info("В привязанную пустую таблицу добавлены заголовки.")
+        except Exception as sheet_err:
+            logger.warning(f"Ошибка проверки/форматирования листов: {sheet_err}")
+            
+        return {
+            "success": True,
+            "spreadsheet_id": spreadsheet.id,
+            "spreadsheet_url": spreadsheet.url,
+            "error": None
+        }
+    except Exception as e:
+        err_msg = str(e)
+        logger.error(f"Ошибка проверки привязываемой таблицы: {e}")
+        
+        # Делаем ошибку авторизации более понятной
+        if "permissiondenied" in err_msg.lower() or "403" in err_msg or "caller does not have permission" in err_msg.lower():
+            err_msg = (
+                "Доступ к таблице заблокирован (Permission Denied).\n"
+                "Убедитесь, что вы открыли доступ на редактирование (Editor) для email бота:\n"
+                f"{get_service_account_email()}"
+            )
+        elif "spreadsheetnotfound" in err_msg.lower() or "404" in err_msg:
+            err_msg = "Таблица не найдена. Проверьте правильность ссылки или ID таблицы."
+            
+        return {
+            "success": False,
+            "spreadsheet_id": "",
+            "spreadsheet_url": "",
+            "error": err_msg
+        }
 
 
 def get_or_create_spreadsheet(spreadsheet_id: str = None) -> tuple[gspread.Spreadsheet, bool]:
@@ -184,6 +260,25 @@ def append_invoice_to_sheet(
                 "2. Выполните команду:\n"
                 "   `wsl --shutdown`\n"
                 "3. Перезапустите приложение Docker Desktop."
+            )
+            return {
+                "success": False,
+                "spreadsheet_id": "",
+                "spreadsheet_url": "",
+                "items_added": 0,
+                "error": friendly_err
+            }
+
+        # Проверяем на специфичную ошибку превышения квоты диска
+        if "storage quota" in err_msg.lower() or "storagequotaexceeded" in err_msg.lower() or "quota has been exceeded" in err_msg.lower():
+            friendly_err = (
+                "Превышена квота диска Google Drive сервисного аккаунта бота (storageQuotaExceeded).\n\n"
+                "Сервисный аккаунт бота исчерпал лимит свободного места Google Drive и не может создавать новые файлы.\n\n"
+                "👉 **Как решить:**\n"
+                "1. Создайте пустую Google Таблицу в вашем личном Google Аккаунте.\n"
+                "2. Поделитесь этой таблицей с сервисным аккаунтом бота в роли **Редактор (Editor)**. Email бота:\n"
+                f"   `{get_service_account_email()}`\n"
+                "3. Привяжите вашу таблицу в настройках бота: **⚙️ Настройки** -> **🔗 Привязать таблицу**."
             )
             return {
                 "success": False,
