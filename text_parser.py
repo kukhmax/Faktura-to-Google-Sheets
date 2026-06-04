@@ -1013,25 +1013,25 @@ def _parse_natural_items(text: str) -> list:
         if len(parts) < 3:
             continue
             
-        # Проверяем, что первый элемент - это число от 1 до 100 (Lp.)
-        lp_str = parts[0]
-        if not re.match(r"^\d+$", lp_str):
+        # Проверяем, является ли первый элемент номером строки (Lp.)
+        # Если это число, значит parts[0] - это Lp, parts[1] - название.
+        # Если не число, значит Lp не распознался, и parts[0] - это уже название!
+        if re.match(r"^\d+$", parts[0]) and len(parts) >= 4:
+            name = parts[1]
+            rest_parts = parts[2:]
+        else:
+            name = parts[0]
+            rest_parts = parts[1:]
+            
+        # Исключаем строки итогов
+        name_lower = name.lower()
+        if "razem" in name_lower or "w tym" in name_lower or "suma" in name_lower:
             continue
             
-        lp = int(lp_str)
-        if not (1 <= lp <= 100):
-            continue
-            
-        # Lp. | Nazwa | Jm (Количество) | Cena netto | Wartość netto | Stawka VAT | Kwota VAT | Wartość brutto
-        # Пользователь хочет:
-        # 1. Количество брать ИЗ КОЛОНКИ Jm (там может быть 5mb)
-        # 2. Цену закупки брать как Cena netto + VAT
-        # 3. Общую стоимость брать из Wartość brutto (последняя колонка)
-        
-        logging.info(f"Line parts: {parts}")
+        logging.info(f"Processing line: {line}")
         
         # Извлекаем все числа из части строки после названия товара
-        rest_of_line = " ".join(parts[2:])
+        rest_of_line = " ".join(rest_parts)
         # Убираем знак процента, чтобы он не мешал парсить НДС
         rest_cleaned = rest_of_line.replace("%", " ")
         
@@ -1071,7 +1071,6 @@ def _parse_natural_items(text: str) -> list:
             # Цена закупки = Cena netto + VAT
             unit_price = round(netto_cena * (1 + vat_rate), 2)
             
-            name = parts[1]
             name = _clean_product_name_robust(name)
             
             raw_items.append(
