@@ -170,11 +170,33 @@ def append_invoice_to_sheet(
         }
         
     except Exception as e:
-        logger.error(f"Ошибка записи в Google Sheets: {e}")
+        err_msg = str(e)
+        logger.error(f"Ошибка записи в Google Sheets: {err_msg}")
+        
+        # Проверяем на специфичную ошибку рассинхронизации времени
+        if "invalid_grant" in err_msg or "short-lived token" in err_msg or "Check your iat and exp values" in err_msg:
+            friendly_err = (
+                "Рассинхронизация времени в WSL2/Docker.\n\n"
+                "Системное время вашего контейнера отстает или спешит по сравнению с серверами Google "
+                "(такое часто происходит в Windows/WSL2 после сна компьютера).\n\n"
+                "👉 **Как исправить:**\n"
+                "1. Откройте терминал Windows (PowerShell или CMD).\n"
+                "2. Выполните команду:\n"
+                "   `wsl --shutdown`\n"
+                "3. Перезапустите приложение Docker Desktop."
+            )
+            return {
+                "success": False,
+                "spreadsheet_id": "",
+                "spreadsheet_url": "",
+                "items_added": 0,
+                "error": friendly_err
+            }
+
         return {
             "success": False,
             "spreadsheet_id": "",
             "spreadsheet_url": "",
             "items_added": 0,
-            "error": str(e)
+            "error": err_msg
         }

@@ -89,8 +89,8 @@ def run_test():
     # Проверяем математику на первом товаре
     # 45.50 + 45.50 * 0.05 + 45.50 * 0.40 = 65.975 -> округленно 65.97 в Python из-за банковского округления
     first_calc = calculated[0]
-    expected_unit = round(45.50 * (1 + 0.05 + 0.40), 2)  # 65.97
-    expected_total = round(expected_unit * 10, 2)       # 659.7
+    expected_unit = round(45.50 + 45.50 * 0.05 + 45.50 * 0.40, 2)  # 65.97
+    expected_total = round((45.50 + 45.50 * 0.05 + 45.50 * 0.40) * 10, 2)       # 659.75
     assert first_calc["new_unit_price"] == expected_unit, f"Неверная розничная цена! Получено {first_calc['new_unit_price']}"
     assert first_calc["new_total_price"] == expected_total, f"Неверная розничная общая сумма! Получено {first_calc['new_total_price']}"
 

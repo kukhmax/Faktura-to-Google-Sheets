@@ -207,3 +207,23 @@
 - `test_parser.py`
 - `text_parser.py` (исправление багов)
 
+---
+
+## Шаг 11: Обработка ошибок рассинхронизации времени Google Sheets API (2026-06-04)
+
+### Что сделано:
+- Диагностирована и проанализирована ошибка работы с Google Sheets API: `invalid_grant: Invalid JWT: Token must be a short-lived token (60 minutes) and in a reasonable timeframe. Check your iat and exp values in the JWT claim.`. 
+- Ошибка возникает из-за рассинхронизации системного времени в WSL2/Docker на Windows после выхода хост-компьютера из режима сна (известная проблема WSL2). В результате JWT-токен подписывается с неверными временными метками `iat`/`exp` и отклоняется серверами Google OAuth.
+- В модуле [sheets_service.py](file:///c:/Users/m-win/Projects/faktura_bot/sheets_service.py) в обработчик исключений добавлена проверка на наличие ключевых слов ошибки `invalid_grant` / `short-lived token`. При ее возникновении бот возвращает пользователю подробную понятную инструкцию на русском языке по исправлению проблемы:
+  1. Выполнить команду `wsl --shutdown` в терминале Windows.
+  2. Перезапустить приложение Docker Desktop.
+- Исправлен тестовый скрипт [test_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/test_parser.py) — устранены расхождения в расчётах ожидаемой розничной цены из-за математического округления типов данных `float` (приведение к единому алгоритму `unit_price + tax_amount + margin_amount` вместо прямого перемножения на `1.45`, а также перемножение не округлённых значений для итоговой стоимости, как это делается в парсере).
+- Проведено успешное локальное тестирование парсера: все тесты проходят без ошибок.
+- Контейнер Docker успешно пересобран и перезапущен.
+
+### Файлы:
+- [sheets_service.py](file:///c:/Users/m-win/Projects/faktura_bot/sheets_service.py) — обработка ошибки `invalid_grant`
+- [test_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/test_parser.py) — исправление формул ожидаемых значений в тестах
+- [DEVELOP.md](file:///c:/Users/m-win/Projects/faktura_bot/DEVELOP.md) — этот лог
+
+
