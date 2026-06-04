@@ -163,6 +163,11 @@ def _extract_invoice_number(text: str) -> str:
     - FV 2024/001
     - Nr faktury: 123
     """
+    # Нормализуем текст: объединяем строки, чтобы поймать многострочные номера
+    # "Faktura VAT\nnr FS-192/26/SUR" → "Faktura VAT nr FS-192/26/SUR"
+    normalized = re.sub(r'\s*\n\s*', ' ', text)
+    normalized = re.sub(r'\s{2,}', ' ', normalized)
+
     patterns = [
         # "Faktura (VAT) nr FV 1/2015" или "Faktura nr: 123/2024"
         # Захватываем всё после "nr" до конца строки или двойного пробела
@@ -174,7 +179,7 @@ def _extract_invoice_number(text: str) -> str:
     ]
 
     for pattern in patterns:
-        match = re.search(pattern, text)
+        match = re.search(pattern, normalized, flags=re.IGNORECASE)
         if match:
             number = match.group(1).strip()
             # Очистка от лишних пробелов вокруг /
@@ -260,6 +265,26 @@ def _parse_table_items(lines: list, header_idx: int) -> list:
         "termin", "uwagi", "podpis",
     ]
 
+    # Определяем, есть ли в таблице колонка Lp. (порядковый номер)
+    # Проверяем первые несколько строк. Если они начинаются с цифры, то Lp есть.
+    has_lp = False
+    valid_lines_count = 0
+    lines_starting_with_digit = 0
+    
+    for i in range(header_idx + 1, min(header_idx + 6, len(lines))):
+        l = lines[i].strip()
+        if not l or any(kw in l.lower() for kw in end_keywords):
+            break
+        # Строка должна содержать хотя бы 2 числа, чтобы считаться товарной строкой
+        if len(_extract_numbers(l)) >= 2:
+            valid_lines_count += 1
+            cleaned_start = l.lstrip(" |│┃\t")
+            if cleaned_start and cleaned_start[0].isdigit():
+                lines_starting_with_digit += 1
+                
+    if valid_lines_count > 0 and (lines_starting_with_digit / valid_lines_count) >= 0.5:
+        has_lp = True
+
     for i in range(header_idx + 1, len(lines)):
         line = lines[i].strip()
         if not line:
@@ -270,10 +295,43 @@ def _parse_table_items(lines: list, header_idx: int) -> list:
         if any(kw in line_lower for kw in end_keywords):
             break
 
+        # Проверяем на многострочное описание (continuation line)
+        is_continuation = False
+        if items:
+            cleaned_start = line.lstrip(" |│┃\t")
+            if has_lp:
+                # Если в таблице есть Lp., строка без ведущей цифры — это продолжение названия
+                if not (cleaned_start and cleaned_start[0].isdigit()):
+                    is_continuation = True
+            else:
+                # Если Lp. нет, строка считается продолжением, если в ней нет достаточного количества чисел
+                # или если числа не сходятся математически
+                numbers = _extract_numbers(line)
+                if len(numbers) < 2:
+                    is_continuation = True
+                elif len(numbers) >= 3:
+                    q, p, t = _determine_price_quantity(numbers)
+                    expected = q * p
+                    if abs(expected - t) > (t * 0.15):
+                        is_continuation = True
+
+        if is_continuation:
+            cleaned_addition = _extract_item_name(line)
+            if cleaned_addition:
+                items[-1].name = f"{items[-1].name} {cleaned_addition}"
+            continue
+
         # Пробуем извлечь товар из строки
         item = _parse_item_line(line)
         if item:
             items.append(item)
+        else:
+            # Если строка не распарсилась, но у нас есть предыдущий товар,
+            # и в строке нет явных признаков других сущностей, считаем её продолжением
+            if items:
+                cleaned_addition = _extract_item_name(line)
+                if cleaned_addition:
+                    items[-1].name = f"{items[-1].name} {cleaned_addition}"
 
     return items
 
@@ -348,8 +406,8 @@ def _extract_numbers(text: str) -> list:
     - 1 234,50 (с пробелом как разделителем тысяч)
     """
     # Находим числа в различных форматах
-    # Порядок: сначала числа с десятичной частью, потом целые
-    pattern = r"(\d[\d\s]*[,\.]\d{1,2}|\d+)"
+    # Порядок: сначала числа с десятичной частью (до 4 десятичных знаков), потом целые
+    pattern = r"(\d[\d\s]*[,\.]\d{1,4}|\d+)"
     raw_matches = re.findall(pattern, text)
 
     numbers = []
@@ -393,16 +451,17 @@ def _extract_item_name(line: str) -> str:
     """
     Извлекает название товара из строки, убирая числа и единицы измерения.
     """
-    # Убираем порядковый номер в начале (1., 2., 1), 2) и т.д.)
-    cleaned = re.sub(r"^\d+[.\)]\s*", "", line)
+    # 1. Убираем порядковый номер в начале (1., 2., 1), 2) и т.д., а также с вертикальной чертой)
+    cleaned = re.sub(r"^\s*\d+\s*[.|\)]\s*", "", line)
 
-    # Убираем числа (цены, количества)
-    cleaned = re.sub(r"\d[\d\s]*[,\.]\d{1,2}", "", cleaned)
-    cleaned = re.sub(r"\b\d+\b", "", cleaned)
+    # 2. Убираем ставки VAT (до удаления отдельных цифр!)
+    cleaned = re.sub(r"\b\d{1,2}\s*%\s*", "", cleaned)
+    cleaned = re.sub(r"\bzw\.?\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bnp\.?\b", "", cleaned, flags=re.IGNORECASE)
 
-    # Убираем единицы измерения
+    # 3. Убираем единицы измерения (включая опечатки OCR типа tsz.)
     units = [
-        "szt", "szt.", "sztuk", "kpl", "kpl.", "komplet",
+        "szt", "szt.", "tsz.", "tsz", "sztuk", "kpl", "kpl.", "komplet",
         "kg", "g", "l", "ml", "m", "m2", "m3", "mb",
         "op", "op.", "opak", "opak.",
         "para", "zest", "zest.", "zestaw",
@@ -411,12 +470,17 @@ def _extract_item_name(line: str) -> str:
     for unit in units:
         cleaned = re.sub(rf"\b{re.escape(unit)}\b", "", cleaned, flags=re.IGNORECASE)
 
-    # Убираем ставки VAT
-    cleaned = re.sub(r"\b\d{1,2}\s*%\s*", "", cleaned)
-    cleaned = re.sub(r"\bzw\.?\b", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\bnp\.?\b", "", cleaned, flags=re.IGNORECASE)
+    # 4. Убираем числа с десятичной частью (до 4 знаков)
+    cleaned = re.sub(r"\d[\d\s]*[,\.]\d{1,4}", "", cleaned)
 
-    # Убираем лишние разделители и пробелы
+    # 5. Убираем только отдельно стоящие целые числа (не трогаем дефисы в кодах вроде HFT-3-PERLA)
+    cleaned = re.sub(r"(?<![\w\-])\d+(?![\w\-])", "", cleaned)
+
+    # 6. Убираем пустые скобки, которые могли остаться после удаления чисел
+    cleaned = re.sub(r"\(\s*\)", "", cleaned)
+    cleaned = re.sub(r"\[\s*\]", "", cleaned)
+
+    # 7. Убираем лишние разделители и пробелы
     cleaned = re.sub(r"[|│┃]", " ", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned)
     cleaned = cleaned.strip(" .\t-")
@@ -456,8 +520,8 @@ def _determine_price_quantity(numbers: list) -> tuple:
             expected_total = q * p
             diff = abs(expected_total - t)
 
-            # Предпочитаем комбинации где количество — целое
-            penalty = 0 if q == int(q) else 10
+            # Предпочитаем комбинации где количество — целое, но не наказываем дробные количества меньше 1
+            penalty = 0 if (q == int(q) or q < 1.0) else 10
             diff += penalty
 
             # Значительное преимущество для естественного порядка: Количество < Цена < Сумма
