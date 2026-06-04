@@ -97,13 +97,20 @@ Igły maszynowe Super stretch 75;90 Organ 3 (75;90) nikiel 1 boks
         assert invoice_real.seller == "Stoklasa"
         assert invoice_real.invoice_number == "2532005414"
         assert invoice_real.date == "20.08.2025"
-        assert len(invoice_real.items) == 22, f"Expected 22 items, got {len(invoice_real.items)}"
+        assert len(invoice_real.items) == 26, f"Expected 26 items, got {len(invoice_real.items)}"
         # Verify first item
         first_item = invoice_real.items[0]
         assert first_item.name == "020808 Igły maszynowe Super stretch 75;90 Organ 3 (75;90) nikiel 1 boks"
         assert first_item.quantity == 1.0
         assert first_item.unit_price == 9.88
         assert first_item.total_price == 9.88
+
+        # Verify last item (which was previously skipped)
+        last_item = invoice_real.items[25]
+        assert "920385" in last_item.name
+        assert last_item.quantity == 0.5
+        assert last_item.unit_price == 27.59
+        assert last_item.total_price == 13.79
 
     print("\n✅ All bug fixes successfully verified!")
 

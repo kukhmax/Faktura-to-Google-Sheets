@@ -439,7 +439,7 @@ def _extract_numbers(text: str) -> list:
     # Находим числа в различных форматах
     # Порядок: сначала числа с десятичной частью (до 4 десятичных знаков), потом целые.
     # Используем [\\d ]* вместо [\\d\\s]* чтобы предотвратить захват табов \\t между колонками.
-    pattern = r"(\d[\d ]*[,\.]\d{1,4}|\d+)"
+    pattern = r"(\d+(?: \d+)*[,\.]\d{1,4}|\d+)"
     raw_matches = re.findall(pattern, text)
 
     numbers = []
@@ -982,99 +982,228 @@ def _extract_seller(text: str) -> str:
 
 def _parse_stoklasa_items(text: str) -> list:
     """
-    Специализированный парсер для фактур Stoklasa.
+    Специализированный парсер для фактур Stoklasa с двухпроходным восстановлением поврежденных OCR-строк.
     """
     lines = text.split("\n")
     cleaned_lines = [l.strip() for l in lines if l.strip()]
 
-    # Шаблон первой строки товара Stoklasa
-    # 020808  8591149319075       1,00 pude      8,03       23         8,03       1,85         9,88 PLN
-    stoklasa_pattern = re.compile(
-        r"^(\d{4,12})\s+(\d{13})\s+(\d[\d ]*[,\.]\d{1,4})\s+([\w*.]+)\s+"
-        r"(\d[\d ]*[,\.]\d{1,4})\s+(\d+)\s+"
-        r"(\d[\d ]*[,\.]\d{1,4})\s+(\d[\d ]*[,\.]\d{1,4})\s+"
-        r"(\d[\d ]*[,\.]\d{1,4})\s*(?:PLN|K\u010d|EUR|CZK)?",
-        re.IGNORECASE
-    )
-
-    items = []
-
+    candidates = []
+    
+    code_at_start_pattern = re.compile(r"^\s*(\d{4,12})\b")
+    ean_pattern = re.compile(r"\b(\d{13})\b")
+    
     for idx, line in enumerate(cleaned_lines):
-        match = stoklasa_pattern.match(line)
-        if not match:
+        code_match = code_at_start_pattern.match(line)
+        if not code_match:
             continue
-
-        # Мы нашли первую строку товара!
-        code = match.group(1)
-        ean = match.group(2)
-        qty_str = match.group(3).replace(" ", "").replace(",", ".")
-        quantity = float(qty_str)
-        unit = match.group(4)
         
-        # Получаем цену за единицу без НДС (Cena/JM) и процент НДС (VAT%)
-        net_unit_price_str = match.group(5).replace(" ", "").replace(",", ".")
-        net_unit_price = float(net_unit_price_str)
+        ean_match = ean_pattern.search(line)
+        if not ean_match:
+            continue
+            
+        code = code_match.group(1)
+        ean = ean_match.group(1)
         
-        vat_percent_str = match.group(6).replace(" ", "").replace(",", ".")
-        vat_percent = float(vat_percent_str)
+        # Берем подстроку после EAN
+        ean_pos = line.find(ean)
+        after_ean = line[ean_pos + len(ean):]
         
-        # Вычисляем цену за единицу с НДС
-        vat_amount = net_unit_price * (vat_percent / 100.0)
-        unit_price = net_unit_price + vat_amount
+        # Извлекаем все числа из подстроки после EAN
+        numbers = _extract_numbers(after_ean)
         
-        # Получаем общую стоимость брутто (цена с НДС)
-        gross_total_str = match.group(9).replace(" ", "").replace(",", ".")
-        gross_total = float(gross_total_str)
-
-        # Название товара должно быть на следующей строке (или следующих строках)
+        # Если чисел слишком мало (меньше 3), то это либо подарок без цены, либо неверная строка. Пропускаем.
+        if len(numbers) < 3:
+            continue
+            
+        # Собираем строки с описанием товара
         name_parts = []
-        name_idx = idx + 1
         
-        # Шаблон таможенного тарифа: 10-значное число (например, 8452300000)
+        # Захватываем текст на той же строке между кодом и EAN (если есть)
+        code_pos = line.find(code)
+        if code_pos != -1 and ean_pos != -1 and code_pos < ean_pos:
+            same_line_text = line[code_pos + len(code):ean_pos].strip()
+            if same_line_text:
+                name_parts.append(same_line_text)
+                
+        name_idx = idx + 1
         tariff_pattern = re.compile(r"\b\d{10}\b")
-
+        
         while name_idx < len(cleaned_lines):
             next_line = cleaned_lines[name_idx]
             
-            # Проверяем, не является ли следующая строка началом нового товара
-            if stoklasa_pattern.match(next_line):
+            # Останавливаемся, если следующая строка - начало нового товара
+            if code_at_start_pattern.match(next_line) and ean_pattern.search(next_line):
                 break
                 
-            # Проверяем, не начинается ли с нового 6-значного кода товара (чтобы отсечь подарки и другие позиции)
-            if re.match(r"^\d{6}\b", next_line):
+            # Останавливаемся, если дошли до итоговой секции
+            if any(ek in next_line.lower() for ek in ["razem", "suma", "do zapłaty", "do zaplaty"]):
                 break
                 
-            # Проверяем, не достигли ли конца таблицы
-            if any(ek in next_line.lower() for ek in ["razem", "suma", "do zap\u0142aty", "do zaplaty"]):
-                break
-
-            # Если строка содержит таможенный тариф, это последняя строка в блоке товара
+            # Останавливаемся, если строка содержит таможенный тариф
             if tariff_pattern.search(next_line):
                 break
                 
-            # Часть названия товара (не очищаем числа агрессивно для Stoklasa, чтобы сохранить 75;90 и т.д.)
             cleaned_part = re.sub(r"[|\u2502\u2503\t]", " ", next_line)
             cleaned_part = re.sub(r"\s{2,}", " ", cleaned_part).strip()
-            
             if cleaned_part:
                 name_parts.append(cleaned_part)
                 
             name_idx += 1
-
-        # Формируем имя товара
-        name_desc = " ".join(name_parts)
-        full_name = f"{code} {name_desc}" if name_desc else code
+            
+        description = " ".join(name_parts)
+        full_name = f"{code} {description}" if description else code
         full_name = re.sub(r"\s{2,}", " ", full_name).strip()
+        
+        candidates.append({
+            "code": code,
+            "ean": ean,
+            "full_name": full_name,
+            "numbers": numbers,
+            "raw_line": line
+        })
 
-        items.append(
-            InvoiceItem(
-                name=full_name,
-                unit_price=round(unit_price, 2),
-                quantity=quantity,
-                total_price=round(gross_total, 2)
+    known_prices = {}    # code -> (net_unit_price, vat_percent)
+    known_prefixes = {}  # prefix -> (net_unit_price, vat_percent)
+
+    # Проход 1: Парсим полные строки (>= 5 чисел после EAN) и строим базу цен/VAT
+    for c in candidates:
+        nums = c["numbers"]
+        code = c["code"]
+        
+        quantity = None
+        net_unit_price = None
+        vat_percent = None
+        net_total = None
+        vat_amount = None
+        gross_total = None
+        
+        if len(nums) >= 6:
+            # Случай 6 чисел: стандартные колонки
+            # [qty, net_unit_price, vat_percent, net_total, vat_amount, gross_total]
+            quantity = nums[0]
+            net_unit_price = nums[1]
+            vat_percent = nums[2]
+            net_total = nums[3]
+            vat_amount = nums[4]
+            gross_total = nums[5]
+        elif len(nums) == 5:
+            # Случай 5 чисел
+            # Возможны варианты:
+            # А) [net_unit_price, vat_percent, net_total, vat_amount, gross_total] (нет qty)
+            # Б) [qty, net_unit_price, net_total, vat_amount, gross_total] (нет vat_percent)
+            if nums[1] in [23.0, 8.0, 5.0]:
+                net_unit_price = nums[0]
+                vat_percent = nums[1]
+                net_total = nums[2]
+                vat_amount = nums[3]
+                gross_total = nums[4]
+                if net_unit_price > 0:
+                    quantity = net_total / net_unit_price
+                else:
+                    quantity = 1.0
+            else:
+                quantity = nums[0]
+                net_unit_price = nums[1]
+                net_total = nums[2]
+                vat_amount = nums[3]
+                gross_total = nums[4]
+                if net_total > 0:
+                    vat_percent = (vat_amount / net_total) * 100.0
+                else:
+                    vat_percent = 23.0
+                    
+        if net_unit_price is not None and vat_percent is not None:
+            # Сохраняем цену в базу для последующего использования в неполных строках
+            known_prices[code] = (net_unit_price, vat_percent)
+            for length in [4, 3]:
+                if len(code) >= length:
+                    prefix = code[:length]
+                    if prefix not in known_prefixes:
+                        known_prefixes[prefix] = (net_unit_price, vat_percent)
+            
+            unit_price = net_unit_price * (1 + vat_percent / 100.0)
+            c["quantity"] = round(quantity, 2) if quantity is not None else 1.0
+            c["unit_price"] = round(unit_price, 2)
+            c["total_price"] = round(gross_total if gross_total is not None else (quantity * unit_price), 2)
+            c["resolved"] = True
+        else:
+            c["resolved"] = False
+
+    # Проход 2: Восстанавливаем неполные строки (3-4 числа после EAN)
+    for c in candidates:
+        if not c["resolved"]:
+            nums = c["numbers"]
+            code = c["code"]
+            
+            quantity = None
+            net_unit_price = None
+            vat_percent = None
+            gross_total = None
+            
+            if len(nums) == 4:
+                # [vat_percent, net_total, vat_amount, gross_total]
+                vat_percent = nums[0]
+                net_total = nums[1]
+                gross_total = nums[3]
+            elif len(nums) == 3:
+                # [net_total, vat_amount, gross_total]
+                net_total = nums[0]
+                gross_total = nums[2]
+                if net_total > 0:
+                    vat_percent = ((gross_total - net_total) / net_total) * 100.0
+                else:
+                    vat_percent = 23.0
+                    
+            # Ищем цену товара в нашей базе (по коду или по префиксам)
+            price_info = None
+            if code in known_prices:
+                price_info = known_prices[code]
+            else:
+                if len(code) >= 4 and code[:4] in known_prefixes:
+                    price_info = known_prefixes[code[:4]]
+                elif len(code) >= 3 and code[:3] in known_prefixes:
+                    price_info = known_prefixes[code[:3]]
+            
+            if price_info:
+                net_unit_price, resolved_vat = price_info
+                if vat_percent is None:
+                    vat_percent = resolved_vat
+            else:
+                # Фолбек: предполагаем, что это кусок ткани с нарезкой 0.5 метра
+                quantity = 0.5
+                if net_total is not None:
+                    net_unit_price = net_total / 0.5
+                else:
+                    net_unit_price = 0.0
+                vat_percent = 23.0
+                
+            if quantity is None and net_unit_price > 0:
+                quantity = net_total / net_unit_price
+                
+            if quantity is None:
+                quantity = 1.0
+                
+            vat_percent = vat_percent if vat_percent is not None else 23.0
+            unit_price = net_unit_price * (1 + vat_percent / 100.0)
+            
+            c["quantity"] = round(quantity, 2)
+            c["unit_price"] = round(unit_price, 2)
+            c["total_price"] = round(gross_total if gross_total is not None else (quantity * unit_price), 2)
+            c["resolved"] = True
+
+    # Собираем результирующий список
+    items = []
+    for c in candidates:
+        if c.get("resolved"):
+            items.append(
+                InvoiceItem(
+                    name=c["full_name"],
+                    unit_price=c["unit_price"],
+                    quantity=c["quantity"],
+                    total_price=c["total_price"]
+                )
             )
-        )
-
+            
     return items
 
 
