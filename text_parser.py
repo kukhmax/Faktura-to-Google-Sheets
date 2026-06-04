@@ -157,17 +157,20 @@ def _extract_invoice_number(text: str) -> str:
 
     Поддерживаемые форматы:
     - Faktura VAT nr FV/2024/001
+    - Faktura nr FV 1/2015
     - Faktura nr: 123/2024
     - FA-001/2024
     - FV 2024/001
     - Nr faktury: 123
     """
     patterns = [
-        r"[Ff]aktura\s+(?:VAT\s+)?(?:[Nn]r\.?\s*:?\s*)([\w/\-]+(?:\s*/\s*[\w\-]+)*)",
-        r"[Nn]r\.?\s+faktury[:\s]+([\w/\-]+(?:\s*/\s*[\w\-]+)*)",
-        r"(FV[/\-\s]*\d[\w/\-]*)",
-        r"(FA[/\-\s]*\d[\w/\-]*)",
-        r"[Ff]aktura[:\s]+([\w/\-]+(?:\s*/\s*[\w\-]+)*)",
+        # "Faktura (VAT) nr FV 1/2015" или "Faktura nr: 123/2024"
+        # Захватываем всё после "nr" до конца строки или двойного пробела
+        r"[Ff]aktura\s+(?:VAT\s+)?(?:[Nn]r\.?\s*:?\s*)([\w/\-]+(?:[\s]+[\w/\-]+)*)",
+        r"[Nn]r\.?\s+faktury[:\s]+([\w/\-]+(?:[\s]+[\w/\-]+)*)",
+        # "FV 1/2015" или "FV/2024/001"
+        r"((?:FV|FA)[/\-\s]*\d[\w/\-\s]*\d)",
+        r"[Ff]aktura[:\s]+([\w/\-]+(?:[\s]+[\w/\-]+)*)",
     ]
 
     for pattern in patterns:
@@ -176,7 +179,13 @@ def _extract_invoice_number(text: str) -> str:
             number = match.group(1).strip()
             # Очистка от лишних пробелов вокруг /
             number = re.sub(r"\s*/\s*", "/", number)
-            return number
+            # Убираем хвостовые слова, которые не являются частью номера
+            # (например, "Data" после номера)
+            number = re.sub(r"\s+(Data|Termin|Metoda|Nabywca|Sprzedawca|Uwagi).*$", "", number, flags=re.IGNORECASE)
+            # Убираем лишние пробелы
+            number = " ".join(number.split())
+            if number:
+                return number
 
     return ""
 
