@@ -246,8 +246,8 @@ def append_invoice_to_sheet(
             
             row = [
                 date_val,
-                inv_num,
                 seller_val,
+                inv_num,
                 item["name"],
                 item["unit_price"],
                 item["quantity"],

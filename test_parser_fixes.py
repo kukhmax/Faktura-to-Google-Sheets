@@ -79,12 +79,31 @@ Igły maszynowe Super stretch 75;90 Organ 3 (75;90) nikiel 1 boks
         print(f"  {i}. '{item.name}': {item.quantity} x {item.unit_price} = {item.total_price}")
 
     assert invoice_stoklasa.seller == "Stoklasa"
+    assert invoice_stoklasa.invoice_number == "FV/2026/06/999"
     assert len(invoice_stoklasa.items) == 1
     stoklasa_item = invoice_stoklasa.items[0]
     assert stoklasa_item.name == "020808 Igły maszynowe Super stretch 75;90 Organ 3 (75;90) nikiel 1 boks"
     assert stoklasa_item.quantity == 1.0
     assert stoklasa_item.unit_price == 9.88
     assert stoklasa_item.total_price == 9.88
+
+    # Test Case 5: Real Stoklasa invoice OCR parser test
+    import os
+    if os.path.exists("stoklasa_real_ocr.txt"):
+        with open("stoklasa_real_ocr.txt", "r", encoding="utf-8") as f:
+            real_ocr = f.read()
+        invoice_real = parse_invoice_text(real_ocr)
+        print(f"\nReal Stoklasa Invoice parsed: seller='{invoice_real.seller}' num='{invoice_real.invoice_number}' items={len(invoice_real.items)}")
+        assert invoice_real.seller == "Stoklasa"
+        assert invoice_real.invoice_number == "2532005414"
+        assert invoice_real.date == "20.08.2025"
+        assert len(invoice_real.items) == 22, f"Expected 22 items, got {len(invoice_real.items)}"
+        # Verify first item
+        first_item = invoice_real.items[0]
+        assert first_item.name == "020808 Igły maszynowe Super stretch 75;90 Organ 3 (75;90) nikiel 1 boks"
+        assert first_item.quantity == 1.0
+        assert first_item.unit_price == 9.88
+        assert first_item.total_price == 9.88
 
     print("\n✅ All bug fixes successfully verified!")
 

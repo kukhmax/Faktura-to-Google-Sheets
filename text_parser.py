@@ -68,11 +68,11 @@ def parse_invoice_text(text: str) -> InvoiceData:
     # Извлекаем дату
     invoice.date = _extract_date(text)
 
-    # Извлекаем номер фактуры
-    invoice.invoice_number = _extract_invoice_number(text)
-
     # Извлекаем продавца (dostawca/sprzedawca)
     invoice.seller = _extract_seller(text)
+
+    # Извлекаем номер фактуры
+    invoice.invoice_number = _extract_invoice_number(text, invoice.seller)
 
     # Извлекаем товары
     invoice.items = _extract_items(text, invoice.seller)
@@ -155,7 +155,7 @@ def _normalize_date(date_str: str) -> str:
     return date_str
 
 
-def _extract_invoice_number(text: str) -> str:
+def _extract_invoice_number(text: str, seller: str = None) -> str:
     """
     Извлекает номер фактуры.
 
@@ -171,9 +171,15 @@ def _extract_invoice_number(text: str) -> str:
     normalized = re.sub(r'\s*\n\s*', ' ', text)
     normalized = re.sub(r'\s{2,}', ' ', normalized)
 
+    # Специальный парсинг для Stoklasa: 10-значное число после Faktura или Faktura nr.
+    if seller and "stoklasa" in seller.lower():
+        match = re.search(r"Faktura\s+(?:nr\.?\s*)?(\d{9,11})\b", normalized, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+
     patterns = [
-        # Поиск nr после Faktura (может разделяться другими словами типа VAT, Sprzedawca:)
-        r"[Ff]aktura.*?\bnr\s*[:\.]?\s*([\w/\-]+(?:[\s]+[\w/\-]+)*)",
+        # Поиск nr после Faktura с ограничением расстояния, чтобы избежать ложных срабатываний
+        r"[Ff]aktura.{0,40}?\bnr\s*[:\.]?\s*([\w/\-]+(?:[\s]+[\w/\-]+)*)",
         # "Faktura (VAT) nr FV 1/2015" или "Faktura nr: 123/2024"
         # Захватываем всё после "nr" до конца строки или двойного пробела
         r"[Ff]aktura\s+(?:VAT\s+)?(?:[Nn]r\.?\s*:?\s*)([\w/\-]+(?:[\s]+[\w/\-]+)*)",
@@ -191,7 +197,7 @@ def _extract_invoice_number(text: str) -> str:
             number = re.sub(r"\s*/\s*", "/", number)
             # Убираем хвостовые слова, которые не являются частью номера
             # (например, "Data" после номера)
-            number = re.sub(r"\s+(Data|Termin|Metoda|Nabywca|Sprzedawca|Uwagi).*$", "", number, flags=re.IGNORECASE)
+            number = re.sub(r"\s+(Data|Termin|Metoda|Nabywca|Sprzedawca|Dostawca|Odbiorca|Uwagi).*$", "", number, flags=re.IGNORECASE)
             # Убираем лишние пробелы
             number = " ".join(number.split())
             if number:
@@ -984,7 +990,7 @@ def _parse_stoklasa_items(text: str) -> list:
     # Шаблон первой строки товара Stoklasa
     # 020808  8591149319075       1,00 pude      8,03       23         8,03       1,85         9,88 PLN
     stoklasa_pattern = re.compile(
-        r"^(\d{4,12})\s+(\d{13})\s+(\d[\d ]*[,\.]\d{1,4})\s+(\w+)\s+"
+        r"^(\d{4,12})\s+(\d{13})\s+(\d[\d ]*[,\.]\d{1,4})\s+([\w*.]+)\s+"
         r"(\d[\d ]*[,\.]\d{1,4})\s+(\d+)\s+"
         r"(\d[\d ]*[,\.]\d{1,4})\s+(\d[\d ]*[,\.]\d{1,4})\s+"
         r"(\d[\d ]*[,\.]\d{1,4})\s*(?:PLN|K\u010d|EUR|CZK)?",
@@ -1027,6 +1033,10 @@ def _parse_stoklasa_items(text: str) -> list:
             
             # Проверяем, не является ли следующая строка началом нового товара
             if stoklasa_pattern.match(next_line):
+                break
+                
+            # Проверяем, не начинается ли с нового 6-значного кода товара (чтобы отсечь подарки и другие позиции)
+            if re.match(r"^\d{6}\b", next_line):
                 break
                 
             # Проверяем, не достигли ли конца таблицы
