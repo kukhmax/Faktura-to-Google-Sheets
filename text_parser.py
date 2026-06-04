@@ -88,15 +88,19 @@ def _extract_date(text: str) -> str:
 
     Поддерживаемые форматы:
     - DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY
-    - Data sprzedaży: DD.MM.YYYY
-    - Data wystawienia: DD.MM.YYYY
+    - YYYY-MM-DD, YYYY.MM.DD, YYYY/MM/DD (ISO формат)
+    - Data sprzedaży: DD.MM.YYYY или YYYY-MM-DD
+    - Data wystawienia: DD.MM.YYYY или YYYY-MM-DD
     """
+    # Шаблон даты: DD.MM.YYYY или YYYY-MM-DD
+    date_regex = r"(\d{1,4}[.\-/]\d{1,2}[.\-/]\d{2,4})"
+    
     # Сначала ищем дату с меткой (более точно)
     labeled_patterns = [
-        r"[Dd]ata\s+sprzeda[żz]y[:\s]+(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})",
-        r"[Dd]ata\s+wystawienia[:\s]+(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})",
-        r"[Dd]ata[:\s]+(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})",
-        r"[Dd]nia[:\s]+(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{2,4})",
+        rf"[Dd]ata\s+sprzeda[żz]y[:\s]+{date_regex}",
+        rf"[Dd]ata\s+wystawienia[:\s]+{date_regex}",
+        rf"[Dd]ata[:\s]+{date_regex}",
+        rf"[Dd]nia[:\s]+{date_regex}",
     ]
 
     for pattern in labeled_patterns:
@@ -106,8 +110,15 @@ def _extract_date(text: str) -> str:
             return _normalize_date(date_str)
 
     # Если не нашли с меткой, ищем просто дату
-    date_pattern = r"(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})"
-    match = re.search(date_pattern, text)
+    # Сначала пробуем YYYY-MM-DD
+    iso_pattern = r"(\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2})"
+    match = re.search(iso_pattern, text)
+    if match:
+        return _normalize_date(match.group(1))
+    
+    # Затем DD.MM.YYYY
+    dmy_pattern = r"(\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})"
+    match = re.search(dmy_pattern, text)
     if match:
         return _normalize_date(match.group(1))
 
@@ -122,11 +133,19 @@ def _normalize_date(date_str: str) -> str:
     # Проверяем формат и добавляем ведущие нули
     parts = normalized.split(".")
     if len(parts) == 3:
-        day = parts[0].zfill(2)
-        month = parts[1].zfill(2)
-        year = parts[2]
-        if len(year) == 2:
-            year = "20" + year
+        # Определяем формат: YYYY-MM-DD или DD-MM-YYYY
+        if len(parts[0]) == 4:
+            # ISO формат: YYYY.MM.DD → DD.MM.YYYY
+            year = parts[0]
+            month = parts[1].zfill(2)
+            day = parts[2].zfill(2)
+        else:
+            # Европейский формат: DD.MM.YYYY
+            day = parts[0].zfill(2)
+            month = parts[1].zfill(2)
+            year = parts[2]
+            if len(year) == 2:
+                year = "20" + year
         return f"{day}.{month}.{year}"
 
     return date_str
