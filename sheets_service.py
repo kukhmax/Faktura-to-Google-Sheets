@@ -50,6 +50,35 @@ def get_service_account_email() -> str:
         return ""
 
 
+def ensure_headers(sheet) -> None:
+    """
+    Проверяет наличие заголовков в первой строке таблицы.
+    Если заголовков нет — вставляет их в строку 1 и форматирует жирным.
+    """
+    try:
+        # Читаем первую строку
+        first_row = sheet.row_values(1)
+        
+        # Проверяем, содержит ли первая строка хотя бы один ожидаемый заголовок
+        expected_keywords = ["дата", "фактур", "товар", "цена", "количество", "стоимость", "налог", "маржа"]
+        first_row_lower = " ".join(str(cell).lower() for cell in first_row) if first_row else ""
+        
+        has_headers = any(kw in first_row_lower for kw in expected_keywords)
+        
+        if not has_headers:
+            # Вставляем заголовки в первую строку (сдвигая данные вниз)
+            sheet.insert_row(config.SHEET_HEADERS, index=1)
+            try:
+                sheet.format("A1:J1", {"textFormat": {"bold": True}})
+            except Exception as fmt_err:
+                logger.warning(f"Не удалось отформатировать заголовки: {fmt_err}")
+            logger.info("Заголовки добавлены в первую строку таблицы.")
+        else:
+            logger.debug("Заголовки уже присутствуют в таблице.")
+    except Exception as e:
+        logger.warning(f"Ошибка проверки/добавления заголовков: {e}")
+
+
 def verify_and_setup_spreadsheet(spreadsheet_url_or_id: str) -> dict:
     """
     Проверяет доступность таблицы по ссылке или ID,
@@ -75,15 +104,8 @@ def verify_and_setup_spreadsheet(spreadsheet_url_or_id: str) -> dict:
         spreadsheet = client.open_by_key(spreadsheet_id)
         sheet = spreadsheet.get_worksheet(0)
         
-        # Проверяем, есть ли там заголовки, если пустая - дописываем
-        try:
-            values = sheet.get_all_values()
-            if not values or len(values) == 0:
-                sheet.append_row(config.SHEET_HEADERS)
-                sheet.format("A1:J1", {"textFormat": {"bold": True}})
-                logger.info("В привязанную пустую таблицу добавлены заголовки.")
-        except Exception as sheet_err:
-            logger.warning(f"Ошибка проверки/форматирования листов: {sheet_err}")
+        # Проверяем и добавляем заголовки, если их нет
+        ensure_headers(sheet)
             
         return {
             "success": True,
@@ -203,6 +225,9 @@ def append_invoice_to_sheet(
         # Получаем/создаем таблицу
         spreadsheet, is_created = get_or_create_spreadsheet(spreadsheet_id)
         sheet = spreadsheet.get_worksheet(0)
+        
+        # Гарантируем наличие заголовков в первой строке
+        ensure_headers(sheet)
         
         # Рассчитываем цены для товаров
         calculated_items = calculate_new_prices(
