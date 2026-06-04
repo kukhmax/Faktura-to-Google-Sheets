@@ -423,3 +423,15 @@
 ### Файлы:
 - [text_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/text_parser.py) — реализация логики NATURAL.
 - [DEVELOP.md](file:///c:/Users/m-win/Projects/faktura_bot/DEVELOP.md) — этот лог.
+
+
+## Шаг 22: Использование Brutto цен для фактур NATURAL (2026-06-04)
+
+### Что сделано:
+- Изменена логика извлечения цен для поставщика **NATURAL** по запросу пользователя.
+- Теперь `unit_price` (цена закупки) вычисляется как **Cena Brutto** (Netto + VAT), что соответствует формуле `Wartość brutto / Количество`. Например, 14.00 netto + 23% VAT = 17.22 brutto.
+- Теперь `total_price` (общая стоимость) берется из последней колонки фактуры (**Wartość brutto**), вместо **Wartość netto**.
+- Это изменение гарантирует, что в Google Таблицах суммы сойдутся цент-в-цент (Количество * Цена закупки = Общая стоимость), и все цены будут отражать реальные расходы с учетом НДС.
+
+### Файлы:
+- [text_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/text_parser.py) — обновлен выбор `unit_price` и `total_price` в `_parse_natural_items`.

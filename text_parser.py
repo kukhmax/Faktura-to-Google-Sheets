@@ -1065,12 +1065,21 @@ def _parse_natural_items(text: str) -> list:
             name = parts[1]
             name = _clean_product_name_robust(name)
             
+            final_t = best_t
+            # Пытаемся найти Wartość brutto (последнее число в строке)
+            # В NATURAL колонки: Cena netto, Wartość netto, Kwota VAT, Wartość brutto
+            if len(nums) >= 3 and nums[-1] >= best_t:
+                final_t = nums[-1]
+                
+            # Пользователь просит "cena netto + stawka VAT", что равно Wartość brutto / Quantity
+            final_p = round(final_t / best_qty, 2)
+            
             raw_items.append(
                 InvoiceItem(
                     name=name,
                     quantity=float(best_qty),
-                    unit_price=float(best_p),
-                    total_price=float(best_t)
+                    unit_price=float(final_p),
+                    total_price=float(final_t)
                 )
             )
             
