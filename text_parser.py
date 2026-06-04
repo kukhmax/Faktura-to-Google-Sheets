@@ -1011,15 +1011,20 @@ def _parse_stoklasa_items(text: str) -> list:
         quantity = float(qty_str)
         unit = match.group(4)
         
+        # Получаем цену за единицу без НДС (Cena/JM) и процент НДС (VAT%)
+        net_unit_price_str = match.group(5).replace(" ", "").replace(",", ".")
+        net_unit_price = float(net_unit_price_str)
+        
+        vat_percent_str = match.group(6).replace(" ", "").replace(",", ".")
+        vat_percent = float(vat_percent_str)
+        
+        # Вычисляем цену за единицу с НДС
+        vat_amount = net_unit_price * (vat_percent / 100.0)
+        unit_price = net_unit_price + vat_amount
+        
         # Получаем общую стоимость брутто (цена с НДС)
         gross_total_str = match.group(9).replace(" ", "").replace(",", ".")
         gross_total = float(gross_total_str)
-
-        # Вычисляем цену за единицу с НДС (цена закупки в терминах бота)
-        if quantity > 0:
-            unit_price = gross_total / quantity
-        else:
-            unit_price = gross_total
 
         # Название товара должно быть на следующей строке (или следующих строках)
         name_parts = []

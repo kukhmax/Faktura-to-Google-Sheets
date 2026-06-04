@@ -360,6 +360,24 @@
 - [sheets_service.py](file:///c:/Users/m-win/Projects/faktura_bot/sheets_service.py) — изменен порядок ячеек при вставке строки
 - [DEVELOP.md](file:///c:/Users/m-win/Projects/faktura_bot/DEVELOP.md) — этот лог
 
+---
+
+## Шаг 18: Восстановление порядка столбцов и расчет цены Stoklasa по Cena/JM + VAT% (2026-06-04)
+
+### Что сделано:
+1. **Восстановление правильного порядка колонок в Google Таблице**:
+   - Восстановили исходный порядок: «Цена закупки (шт.)» идет 5-м столбцом (Колонка E), а «Количество» — 6-м (Колонка F). Это соответствует существующей структуре таблицы пользователя, где значения были перепутаны из-за ошибочного свопа.
+   - Обновили заголовки `SHEET_HEADERS` в `config.py` и порядок формирования строки в `sheets_service.py` (`unit_price` перед `quantity`).
+2. **Новый расчет цены Stoklasa**:
+   - Изменили формулу расчета цены закупка (`unit_price`) для Stoklasa: теперь она вычисляется напрямую из колонок `Cena/JM` и `VAT%` по формуле `Cena/JM + (Cena/JM * VAT% / 100)`. Это гарантирует 100% точность совпадения цен до копейки без погрешностей округления при делении общей стоимости на количество.
+
+### Файлы:
+- [config.py](file:///c:/Users/m-win/Projects/faktura_bot/config.py) — восстановлен порядок заголовков
+- [sheets_service.py](file:///c:/Users/m-win/Projects/faktura_bot/sheets_service.py) — восстановлен порядок ячеек в строке
+- [text_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/text_parser.py) — новый расчет цены закупка по формуле Cena/JM + VAT%
+- [DEVELOP.md](file:///c:/Users/m-win/Projects/faktura_bot/DEVELOP.md) — этот лог
+
+
 
 
 
