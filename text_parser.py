@@ -997,11 +997,11 @@ def _extract_seller(text: str) -> str:
 def _parse_natural_items(text: str) -> list:
     """
     Специализированный парсер для фактур NATURAL.
-    В фактурах NATURAL столбцы разделены табуляцией, и часто OCR обрезает колонку с количеством 
-    (или она склеивается с единицей измерения, например "15 mb" -> "5mb").
-    Поэтому мы восстанавливаем количество через деление: Wartość netto / Cena netto,
-    либо берем первые 3 числа если колонка количества распозналась отдельно.
     """
+    import logging
+    with open("natural_raw.txt", "w", encoding="utf-8") as f:
+        f.write(text)
+    
     lines = text.split("\n")
     cleaned_lines = [l.strip() for l in lines if l.strip()]
 
@@ -1022,44 +1022,55 @@ def _parse_natural_items(text: str) -> list:
         if not (1 <= lp <= 100):
             continue
             
-        # В NATURAL мы имеем строгую структуру колонок с разделителем табуляции:
         # Lp. | Nazwa | Jm (Количество) | Cena netto | Wartość netto | Stawka VAT | Kwota VAT | Wartość brutto
         # Пользователь хочет:
         # 1. Количество брать ИЗ КОЛОНКИ Jm (там может быть 5mb)
         # 2. Цену закупки брать как Cena netto + VAT
         # 3. Общую стоимость брать из Wartość brutto (последняя колонка)
         
-        if len(parts) >= 7:
-            # 1. Количество
-            jm_col = parts[2]
-            qty_match = re.search(r"(\d+[\.,]?\d*)", jm_col)
-            if not qty_match:
-                continue
-            qty = float(qty_match.group(1).replace(",", "."))
+        logging.info(f"Line parts: {parts}")
+        
+        # Извлекаем все числа из части строки после названия товара
+        rest_of_line = " ".join(parts[2:])
+        # Убираем знак процента, чтобы он не мешал парсить НДС
+        rest_cleaned = rest_of_line.replace("%", " ")
+        
+        nums = []
+        for p in rest_cleaned.split():
+            # Ищем числовой паттерн
+            match = re.search(r'(\d+[\.,]?\d*)', p)
+            if match:
+                try:
+                    val = float(match.group(1).replace(",", "."))
+                    nums.append(val)
+                except ValueError:
+                    continue
+                    
+        # У нас должно быть минимум 5 чисел: Количество, Cena netto, Wartość netto, Kwota VAT, Wartość brutto
+        # (Иногда Stawka VAT 23.0 тоже распознается как число, тогда их 6)
+        if len(nums) >= 5:
+            # Последние 4 числа всегда: Wartość netto, [Stawka VAT], Kwota VAT, Wartość brutto
+            # Но Stawka VAT может отсутствовать если OCR её не прочитал как число
+            # Проще брать с конца:
+            brutto = nums[-1]
+            vat_kwota = nums[-2]
             
-            # 2. Цена закупки (Cena netto + VAT)
-            cena_str = parts[3].replace(" ", "").replace(",", ".")
-            try:
-                cena_netto = float(cena_str)
-            except ValueError:
-                continue
-                
-            # Ищем НДС, он обычно в parts[5] (напр. "23%")
-            vat_str = parts[5].replace("%", "").replace(" ", "").replace(",", ".")
-            try:
-                vat_rate = float(vat_str) / 100.0
-            except ValueError:
+            # Проверяем, есть ли ставка НДС (например 23.0 или 8.0) перед kwota VAT
+            if 0 <= nums[-3] <= 100 and len(nums) >= 6:
+                vat_rate = nums[-3] / 100.0
+                netto_wartosc = nums[-4]
+                netto_cena = nums[-5]
+                qty = nums[-6]
+            else:
                 vat_rate = 0.23 # fallback
+                netto_wartosc = nums[-3]
+                netto_cena = nums[-4]
+                qty = nums[-5]
                 
-            unit_price = round(cena_netto * (1 + vat_rate), 2)
+            # Пользовательская логика:
+            # Цена закупки = Cena netto + VAT
+            unit_price = round(netto_cena * (1 + vat_rate), 2)
             
-            # 3. Общая стоимость (Wartość brutto, последняя колонка)
-            brutto_str = parts[-1].replace(" ", "").replace(",", ".")
-            try:
-                total_price = float(brutto_str)
-            except ValueError:
-                total_price = round(qty * unit_price, 2)
-                
             name = parts[1]
             name = _clean_product_name_robust(name)
             
@@ -1068,7 +1079,7 @@ def _parse_natural_items(text: str) -> list:
                     name=name,
                     quantity=qty,
                     unit_price=unit_price,
-                    total_price=total_price
+                    total_price=brutto
                 )
             )
             
