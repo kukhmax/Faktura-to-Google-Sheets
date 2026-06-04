@@ -345,5 +345,21 @@
 - [test_parser_fixes.py](file:///c:/Users/m-win/Projects/faktura_bot/test_parser_fixes.py) — новый тест-кейс с проверкой реального OCR-текста
 - [DEVELOP.md](file:///c:/Users/m-win/Projects/faktura_bot/DEVELOP.md) — этот лог
 
+---
+
+## Шаг 17: Изменение порядка столбцов (Количество перед Ценой закупки) (2026-06-04)
+
+### Что сделано:
+1. **Изменение структуры Google Таблицы**:
+   - Переставили местами столбцы «Количество» и «Цена закупки (шт.)»: теперь столбец «Количество» идет сразу за названием товара (Колонка E), а столбец «Цена закупки (шт.)» расположен после него (Колонка F).
+   - Обновили `config.py` (заголовки `SHEET_HEADERS`).
+   - Обновили `sheets_service.py` (поменяли местами `item["quantity"]` и `item["unit_price"]` в строке перед вставкой в таблицу).
+
+### Файлы:
+- [config.py](file:///c:/Users/m-win/Projects/faktura_bot/config.py) — изменен порядок заголовков
+- [sheets_service.py](file:///c:/Users/m-win/Projects/faktura_bot/sheets_service.py) — изменен порядок ячеек при вставке строки
+- [DEVELOP.md](file:///c:/Users/m-win/Projects/faktura_bot/DEVELOP.md) — этот лог
+
+
 
 
