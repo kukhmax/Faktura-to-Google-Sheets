@@ -33,6 +33,7 @@ DEFAULT_MARGIN_PERCENT = float(os.getenv("DEFAULT_MARGIN_PERCENT", "40"))
 SHEET_HEADERS = [
     "Дата покупки",
     "Номер фактуры",
+    "Продавец",
     "Название товара",
     "Цена закупки (шт.)",
     "Количество",

@@ -292,4 +292,30 @@
 - [text_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/text_parser.py) — логика извлечения метаданных и разбора товаров
 - [DEVELOP.md](file:///c:/Users/m-win/Projects/faktura_bot/DEVELOP.md) — этот лог
 
+---
+
+## Шаг 15: Мульти-парсерная маршрутизация, поддержка Stoklasa и столбец «Продавец» (2026-06-04)
+
+### Что сделано:
+1. **Столбец «Продавец»**: Добавлен новый заголовок `"Продавец"` в `SHEET_HEADERS` в [config.py](file:///c:/Users/m-win/Projects/faktura_bot/config.py) как 3-й столбец (Колонка C). Все последующие заголовки сдвинуты вправо. Модифицирован метод `append_invoice_to_sheet` в [sheets_service.py](file:///c:/Users/m-win/Projects/faktura_bot/sheets_service.py) для записи названия продавца в каждую добавляемую строчку.
+2. **Определение продавца**: Реализована функция `_extract_seller` в [text_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/text_parser.py), которая распознает продавца (`Stoklasa` или `"GAIA" Sp. z o.o.`) по тексту.
+3. **Маршрутизация парсеров**: Метод `_extract_items` изменен для автоматического переключения парсера в зависимости от определенного продавца.
+4. **Специализированный парсер Stoklasa**: Реализован `_parse_stoklasa_items`, который:
+   - Распознает трехстрочные блоки товаров с кодами Stoklasa и EAN.
+   - Считывает количество и итоговую сумму брутто (gross total).
+   - Вычисляет цену закупки за единицу с НДС (gross unit price).
+   - Собирает строки описания товара до строки таможенного тарифа (`\b\d{10}\b`), бережно сохраняя внутренние числа описания (например, `75;90`).
+5. **Устранение таймаутов бота**:
+   - Увеличен таймаут скачивания файлов от Telegram до 60 секунд.
+   - Все тяжелые синхронные блоки кода (OCR API запросы и Google Sheets транзакции) вынесены в фоновые потоки через `asyncio.to_thread`. Это полностью решило проблему зависания и падения по таймауту event-loop при обработке PDF.
+- Все автотесты (`test_parser.py` и `test_parser_fixes.py`) успешно пройдены.
+- Бот пересобран в Docker и успешно запущен.
+
+### Файлы:
+- [config.py](file:///c:/Users/m-win/Projects/faktura_bot/config.py) — добавление заголовка «Продавец»
+- [sheets_service.py](file:///c:/Users/m-win/Projects/faktura_bot/sheets_service.py) — поддержка записи нового столбца
+- [text_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/text_parser.py) — извлечение продавца и специализированный парсер Stoklasa
+- [bot.py](file:///c:/Users/m-win/Projects/faktura_bot/bot.py) — асинхронный запуск синхронных вызовов в потоках и увеличенные таймауты
+- [DEVELOP.md](file:///c:/Users/m-win/Projects/faktura_bot/DEVELOP.md) — этот лог
+
 

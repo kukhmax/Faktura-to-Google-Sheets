@@ -284,7 +284,8 @@ async def save_spreadsheet_handler(update: Update, context: ContextTypes.DEFAULT
         "⏳ Проверяю доступ к вашей таблице..."
     )
     
-    res = sheets_service.verify_and_setup_spreadsheet(text)
+    import asyncio
+    res = await asyncio.to_thread(sheets_service.verify_and_setup_spreadsheet, text)
     
     if not res["success"]:
         try:
@@ -383,15 +384,16 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     try:
-        # Скачиваем файл в байты
-        tg_file = await context.bot.get_file(file_id)
-        file_bytes = await tg_file.download_as_bytearray()
+        # Скачиваем файл в байты с увеличенным таймаутом
+        tg_file = await context.bot.get_file(file_id, timeout=60)
+        file_bytes = await tg_file.download_as_bytearray(timeout=60)
         
         # 3. Распознаем текст через OCR.space
         await status_message.edit_text(
             "⏳ **Файл успешно скачан!** Распознаю польский текст (Engine 2)..."
         )
-        ocr_result = ocr_service.ocr_from_bytes(bytes(file_bytes), filename)
+        import asyncio
+        ocr_result = await asyncio.to_thread(ocr_service.ocr_from_bytes, bytes(file_bytes), filename)
         
         if not ocr_result["success"]:
             await status_message.edit_text(
@@ -425,7 +427,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         margin = settings_manager.get_margin(user_id)
         spreadsheet_id = settings_manager.get_spreadsheet_id(user_id)
         
-        sheet_result = sheets_service.append_invoice_to_sheet(
+        import asyncio
+        sheet_result = await asyncio.to_thread(
+            sheets_service.append_invoice_to_sheet,
             invoice_data,
             tax,
             margin,

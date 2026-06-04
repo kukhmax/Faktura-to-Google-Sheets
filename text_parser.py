@@ -38,6 +38,7 @@ class InvoiceData:
 
     date: str = ""  # Дата покупки
     invoice_number: str = ""  # Номер фактуры
+    seller: str = ""  # Название продавца
     items: list = field(default_factory=list)  # Список InvoiceItem
     raw_text: str = ""  # Исходный OCR-текст (для отладки)
 
@@ -70,11 +71,14 @@ def parse_invoice_text(text: str) -> InvoiceData:
     # Извлекаем номер фактуры
     invoice.invoice_number = _extract_invoice_number(text)
 
+    # Извлекаем продавца (dostawca/sprzedawca)
+    invoice.seller = _extract_seller(text)
+
     # Извлекаем товары
-    invoice.items = _extract_items(text)
+    invoice.items = _extract_items(text, invoice.seller)
 
     logger.info(
-        f"Парсинг завершён: дата='{invoice.date}', "
+        f"Парсинг завершён: продавец='{invoice.seller}', дата='{invoice.date}', "
         f"номер='{invoice.invoice_number}', "
         f"товаров={len(invoice.items)}"
     )
@@ -196,16 +200,27 @@ def _extract_invoice_number(text: str) -> str:
     return ""
 
 
-def _extract_items(text: str) -> list:
+def _extract_items(text: str, seller: str = "-") -> list:
     """
     Извлекает товары из текста фактуры.
 
     Стратегия:
-    1. Пробуем интеллектуальный парсер на основе кодов товаров и табуляции (для сложных макетов)
-    2. Если не сработало, используем стандартный табличный парсер
-    3. Если таблица не найдена — пробуем гибкий построчный поиск
+    1. Если продавец Stoklasa, используем специализированный парсер Stoklasa
+    2. Иначе пробуем интеллектуальный парсер на основе кодов товаров и табуляции
+    3. Если не сработало, используем стандартный табличный парсер
+    4. Если таблица не найдена — пробуем гибкий построчный поиск
     """
-    # Сначала пробуем интеллектуальный парсер
+    # 1. Если продавец Stoklasa, используем специализированный парсер
+    if seller and "stoklasa" in seller.lower():
+        try:
+            items = _parse_stoklasa_items(text)
+            if items:
+                logger.info(f"Успешно извлечено {len(items)} товаров с помощью парсера Stoklasa.")
+                return items
+        except Exception as e:
+            logger.error(f"Ошибка парсинга Stoklasa: {e}")
+
+    # 2. Пробуем интеллектуальный парсер
     try:
         items = _parse_table_code_and_tab_aware(text)
         if items:
@@ -926,4 +941,125 @@ def _determine_price_quantity_robust(numbers: list, known_qty: float = None) -> 
         return best
         
     return numbers[0], numbers[1], numbers[2]
+
+
+def _extract_seller(text: str) -> str:
+    """
+    Определяет продавца по тексту фактуры.
+    """
+    text_lower = text.lower()
+    
+    # 1. Проверяем на Stoklasa
+    if "stoklasa" in text_lower:
+        return "Stoklasa"
+        
+    # 2. Проверяем на GAIA
+    if "gaia" in text_lower or "skravki" in text_lower or "542-24-38-603" in text_lower or "5422438603" in text_lower:
+        return '"GAIA" Sp. z o.o.'
+        
+    # 3. Дефолтный или пытаемся извлечь из "Sprzedawca:"
+    sprzedawca_patterns = [
+        r"Sprzedawca[:\s]+([^\n\t|]+)",
+        r"Dostawca[:\s]+([^\n\t|]+)"
+    ]
+    for pattern in sprzedawca_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            seller = match.group(1).strip()
+            # Очистка
+            seller = re.sub(r'\s+', ' ', seller)
+            if seller and len(seller) > 2:
+                return seller
+                
+    return "-"
+
+
+def _parse_stoklasa_items(text: str) -> list:
+    """
+    Специализированный парсер для фактур Stoklasa.
+    """
+    lines = text.split("\n")
+    cleaned_lines = [l.strip() for l in lines if l.strip()]
+
+    # Шаблон первой строки товара Stoklasa
+    # 020808  8591149319075       1,00 pude      8,03       23         8,03       1,85         9,88 PLN
+    stoklasa_pattern = re.compile(
+        r"^(\d{4,12})\s+(\d{13})\s+(\d[\d ]*[,\.]\d{1,4})\s+(\w+)\s+"
+        r"(\d[\d ]*[,\.]\d{1,4})\s+(\d+)\s+"
+        r"(\d[\d ]*[,\.]\d{1,4})\s+(\d[\d ]*[,\.]\d{1,4})\s+"
+        r"(\d[\d ]*[,\.]\d{1,4})\s*(?:PLN|K\u010d|EUR|CZK)?",
+        re.IGNORECASE
+    )
+
+    items = []
+
+    for idx, line in enumerate(cleaned_lines):
+        match = stoklasa_pattern.match(line)
+        if not match:
+            continue
+
+        # Мы нашли первую строку товара!
+        code = match.group(1)
+        ean = match.group(2)
+        qty_str = match.group(3).replace(" ", "").replace(",", ".")
+        quantity = float(qty_str)
+        unit = match.group(4)
+        
+        # Получаем общую стоимость брутто (цена с НДС)
+        gross_total_str = match.group(9).replace(" ", "").replace(",", ".")
+        gross_total = float(gross_total_str)
+
+        # Вычисляем цену за единицу с НДС (цена закупки в терминах бота)
+        if quantity > 0:
+            unit_price = gross_total / quantity
+        else:
+            unit_price = gross_total
+
+        # Название товара должно быть на следующей строке (или следующих строках)
+        name_parts = []
+        name_idx = idx + 1
+        
+        # Шаблон таможенного тарифа: 10-значное число (например, 8452300000)
+        tariff_pattern = re.compile(r"\b\d{10}\b")
+
+        while name_idx < len(cleaned_lines):
+            next_line = cleaned_lines[name_idx]
+            
+            # Проверяем, не является ли следующая строка началом нового товара
+            if stoklasa_pattern.match(next_line):
+                break
+                
+            # Проверяем, не достигли ли конца таблицы
+            if any(ek in next_line.lower() for ek in ["razem", "suma", "do zap\u0142aty", "do zaplaty"]):
+                break
+
+            # Если строка содержит таможенный тариф, это последняя строка в блоке товара
+            if tariff_pattern.search(next_line):
+                break
+                
+            # Часть названия товара (не очищаем числа агрессивно для Stoklasa, чтобы сохранить 75;90 и т.д.)
+            cleaned_part = re.sub(r"[|\u2502\u2503\t]", " ", next_line)
+            cleaned_part = re.sub(r"\s{2,}", " ", cleaned_part).strip()
+            
+            if cleaned_part:
+                name_parts.append(cleaned_part)
+                
+            name_idx += 1
+
+        # Формируем имя товара
+        name_desc = " ".join(name_parts)
+        full_name = f"{code} {name_desc}" if name_desc else code
+        full_name = re.sub(r"\s{2,}", " ", full_name).strip()
+
+        items.append(
+            InvoiceItem(
+                name=full_name,
+                unit_price=round(unit_price, 2),
+                quantity=quantity,
+                total_price=round(gross_total, 2)
+            )
+        )
+
+    return items
+
 

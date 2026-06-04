@@ -60,6 +60,32 @@ Lp. | Nazwa towaru/usługi | PKWiU | Ilość | J.m. | Cena netto | Wartość net
     assert second_item.unit_price == 5.0
     assert second_item.total_price == 50.0
 
+    # Test Case 4: Stoklasa parser test
+    stoklasa_ocr_sample = """
+Faktura VAT nr FV/2026/06/999
+Dostawca: Stoklasa s.r.o.
+Nabywca: Firma B
+Data wystawienia: 04.06.2026
+
+Kod taryfy celnej Kraj pochodzenia
+020808  8591149319075       1,00 pude      8,03       23         8,03       1,85         9,88 PLN
+Igły maszynowe Super stretch 75;90 Organ 3 (75;90) nikiel 1 boks
+        8452300000                  CZ
+"""
+    invoice_stoklasa = parse_invoice_text(stoklasa_ocr_sample)
+    print(f"\nStoklasa Invoice parsed: seller='{invoice_stoklasa.seller}' num='{invoice_stoklasa.invoice_number}'")
+    print(f"Items parsed ({len(invoice_stoklasa.items)}):")
+    for i, item in enumerate(invoice_stoklasa.items, 1):
+        print(f"  {i}. '{item.name}': {item.quantity} x {item.unit_price} = {item.total_price}")
+
+    assert invoice_stoklasa.seller == "Stoklasa"
+    assert len(invoice_stoklasa.items) == 1
+    stoklasa_item = invoice_stoklasa.items[0]
+    assert stoklasa_item.name == "020808 Igły maszynowe Super stretch 75;90 Organ 3 (75;90) nikiel 1 boks"
+    assert stoklasa_item.quantity == 1.0
+    assert stoklasa_item.unit_price == 9.88
+    assert stoklasa_item.total_price == 9.88
+
     print("\n✅ All bug fixes successfully verified!")
 
 if __name__ == "__main__":

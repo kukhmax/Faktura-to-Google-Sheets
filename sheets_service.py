@@ -69,7 +69,7 @@ def ensure_headers(sheet) -> None:
             # Вставляем заголовки в первую строку (сдвигая данные вниз)
             sheet.insert_row(config.SHEET_HEADERS, index=1)
             try:
-                sheet.format("A1:J1", {"textFormat": {"bold": True}})
+                sheet.format("A1:K1", {"textFormat": {"bold": True}})
             except Exception as fmt_err:
                 logger.warning(f"Не удалось отформатировать заголовки: {fmt_err}")
             logger.info("Заголовки добавлены в первую строку таблицы.")
@@ -178,7 +178,7 @@ def get_or_create_spreadsheet(spreadsheet_id: str = None) -> tuple[gspread.Sprea
         
         # Делаем первую строчку жирной для красоты
         try:
-            sheet.format("A1:J1", {"textFormat": {"bold": True}})
+            sheet.format("A1:K1", {"textFormat": {"bold": True}})
         except Exception as fmt_err:
             logger.warning(f"Не удалось отформатировать заголовки: {fmt_err}")
             
@@ -242,10 +242,12 @@ def append_invoice_to_sheet(
             # Заменяем пустые значения даты и номера фактуры на прочерки или плейсхолдеры
             date_val = invoice_data.date or "-"
             inv_num = invoice_data.invoice_number or "-"
+            seller_val = invoice_data.seller or "-"
             
             row = [
                 date_val,
                 inv_num,
+                seller_val,
                 item["name"],
                 item["unit_price"],
                 item["quantity"],
