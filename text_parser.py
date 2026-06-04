@@ -1022,64 +1022,53 @@ def _parse_natural_items(text: str) -> list:
         if not (1 <= lp <= 100):
             continue
             
-        parsed_numbers = []
-        for p in parts:
-            if "%" in p:
+        # В NATURAL мы имеем строгую структуру колонок с разделителем табуляции:
+        # Lp. | Nazwa | Jm (Количество) | Cena netto | Wartość netto | Stawka VAT | Kwota VAT | Wartość brutto
+        # Пользователь хочет:
+        # 1. Количество брать ИЗ КОЛОНКИ Jm (там может быть 5mb)
+        # 2. Цену закупки брать как Cena netto + VAT
+        # 3. Общую стоимость брать из Wartość brutto (последняя колонка)
+        
+        if len(parts) >= 7:
+            # 1. Количество
+            jm_col = parts[2]
+            qty_match = re.search(r"(\d+[\.,]?\d*)", jm_col)
+            if not qty_match:
                 continue
+            qty = float(qty_match.group(1).replace(",", "."))
             
-            # Извлекаем все чистые числа
-            if re.match(r"^\d[\d ]*[,\.]\d{1,4}$|^\d+$", p):
-                val = float(p.replace(" ", "").replace(",", "."))
-                parsed_numbers.append(val)
+            # 2. Цена закупки (Cena netto + VAT)
+            cena_str = parts[3].replace(" ", "").replace(",", ".")
+            try:
+                cena_netto = float(cena_str)
+            except ValueError:
+                continue
                 
-        if len(parsed_numbers) < 3:
-            continue
+            # Ищем НДС, он обычно в parts[5] (напр. "23%")
+            vat_str = parts[5].replace("%", "").replace(" ", "").replace(",", ".")
+            try:
+                vat_rate = float(vat_str) / 100.0
+            except ValueError:
+                vat_rate = 0.23 # fallback
+                
+            unit_price = round(cena_netto * (1 + vat_rate), 2)
             
-        # Убираем lp
-        nums = parsed_numbers[1:]
-        
-        best_qty = None
-        best_p = None
-        best_t = None
-        
-        # 1. Если в массиве есть количество, цена и сумма (например, 15, 14, 210)
-        if len(nums) >= 3:
-            if abs(nums[0] * nums[1] - nums[2]) < 0.05:
-                best_qty = nums[0]
-                best_p = nums[1]
-                best_t = nums[2]
+            # 3. Общая стоимость (Wartość brutto, последняя колонка)
+            brutto_str = parts[-1].replace(" ", "").replace(",", ".")
+            try:
+                total_price = float(brutto_str)
+            except ValueError:
+                total_price = round(qty * unit_price, 2)
                 
-        # 2. Если количества нет, а только цена и сумма (например, 14, 210)
-        if best_qty is None and len(nums) >= 2:
-            p = nums[0]
-            t = nums[1]
-            if p > 0:
-                calc_qty = t / p
-                if 0.001 <= calc_qty <= 10000:
-                    best_qty = round(calc_qty, 4)
-                    best_p = p
-                    best_t = t
-                    
-        if best_qty is not None:
-            # Название товара - это вторая колонка
             name = parts[1]
             name = _clean_product_name_robust(name)
-            
-            final_t = best_t
-            # Пытаемся найти Wartość brutto (последнее число в строке)
-            # В NATURAL колонки: Cena netto, Wartość netto, Kwota VAT, Wartość brutto
-            if len(nums) >= 3 and nums[-1] >= best_t:
-                final_t = nums[-1]
-                
-            # Пользователь просит "cena netto + stawka VAT", что равно Wartość brutto / Quantity
-            final_p = round(final_t / best_qty, 2)
             
             raw_items.append(
                 InvoiceItem(
                     name=name,
-                    quantity=float(best_qty),
-                    unit_price=float(final_p),
-                    total_price=float(final_t)
+                    quantity=qty,
+                    unit_price=unit_price,
+                    total_price=total_price
                 )
             )
             
