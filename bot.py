@@ -385,8 +385,8 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # Скачиваем файл в байты с увеличенным таймаутом
-        tg_file = await context.bot.get_file(file_id, timeout=60)
-        file_bytes = await tg_file.download_as_bytearray(timeout=60)
+        tg_file = await context.bot.get_file(file_id, read_timeout=60)
+        file_bytes = await tg_file.download_as_bytearray(read_timeout=60)
         
         # 3. Распознаем текст через OCR.space
         await status_message.edit_text(
