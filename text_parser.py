@@ -236,6 +236,16 @@ def _extract_items(text: str, seller: str = "-") -> list:
         except Exception as e:
             logger.error(f"Ошибка парсинга NATURAL: {e}")
 
+    # 1.6 Если продавец JURPOL, используем специализированный парсер
+    if seller and "jurpol" in seller.lower():
+        try:
+            items = _parse_jurpol_items(text)
+            if items:
+                logger.info(f"Успешно извлечено {len(items)} товаров с помощью парсера JURPOL.")
+                return items
+        except Exception as e:
+            logger.error(f"Ошибка парсинга JURPOL: {e}")
+
     # 2. Пробуем интеллектуальный парсер
     try:
         items = _parse_table_code_and_tab_aware(text)
@@ -977,6 +987,10 @@ def _extract_seller(text: str) -> str:
     if "gaia" in text_lower or "skravki" in text_lower or "542-24-38-603" in text_lower or "5422438603" in text_lower:
         return '"GAIA" Sp. z o.o.'
         
+    # 3. Проверяем на JURPOL
+    if "jurpol" in text_lower or "gąsiorek" in text_lower or "gasiorek" in text_lower or "7251086439" in text_lower:
+        return "JURPOL"
+        
     # 3. Дефолтный или пытаемся извлечь из "Sprzedawca:"
     sprzedawca_patterns = [
         r"Sprzedawca[:\s]+([^\n\t|]+)",
@@ -992,6 +1006,36 @@ def _extract_seller(text: str) -> str:
                 return seller
                 
     return "-"
+
+
+def _extract_invoice_row_numbers(text: str) -> list:
+    """
+    Интеллектуально извлекает числа из числовой части строки товара.
+    Убирает единицы измерения (включая опечатки OCR типа S2t -> szt) и проценты,
+    после чего парсит все валидные float.
+    """
+    # 1. Заменяем s2t/S2t на szt
+    cleaned = re.sub(r"\bs2t\b", "szt", text, flags=re.IGNORECASE)
+    # 2. Разделяем слипшиеся буквы и цифры (например, 15mb -> 15 mb)
+    cleaned = re.sub(r"(\d+)([a-zA-Z]+)", r"\1 \2", cleaned)
+    cleaned = re.sub(r"([a-zA-Z]+)(\d+)", r"\1 \2", cleaned)
+    # 3. Убираем единицы измерения
+    units_to_remove = ["sztuka", "sztuk", "szt", "tsz", "kpl", "komplet", "kg", "mb", "op", "opak"]
+    for unit in units_to_remove:
+        cleaned = re.sub(rf"\b{re.escape(unit)}\b", " ", cleaned, flags=re.IGNORECASE)
+    # 4. Убираем %
+    cleaned = cleaned.replace("%", " ")
+    
+    # 5. Извлекаем числа
+    nums = []
+    for p in cleaned.split():
+        match = re.search(r"(\d+[\.,]?\d*)", p)
+        if match:
+            try:
+                nums.append(float(match.group(1).replace(",", ".")))
+            except ValueError:
+                pass
+    return nums
 
 
 def _parse_natural_items(text: str) -> list:
@@ -1014,65 +1058,188 @@ def _parse_natural_items(text: str) -> list:
             continue
             
         # Проверяем, является ли первый элемент номером строки (Lp.)
-        # Если это число, значит parts[0] - это Lp, parts[1] - название.
-        # Если не число, значит Lp не распознался, и parts[0] - это уже название!
-        if re.match(r"^\d+$", parts[0]) and len(parts) >= 4:
-            name = parts[1]
-            rest_parts = parts[2:]
+        # Номер строки может содержать мусорные знаки типа | или !, очистим их для проверки.
+        match = re.match(r"^(\d+)\s*(?:[|!]\s*)?", parts[0])
+        if match:
+            lp_val = int(match.group(1))
+            if 1 <= lp_val <= 100:
+                name_part = parts[0][match.end():].strip()
+                if name_part:
+                    name = name_part
+                    rest_parts = parts[1:]
+                else:
+                    name = parts[1]
+                    rest_parts = parts[2:]
+            else:
+                name = parts[0]
+                rest_parts = parts[1:]
         else:
             name = parts[0]
             rest_parts = parts[1:]
             
         # Исключаем строки итогов
         name_lower = name.lower()
-        if "razem" in name_lower or "w tym" in name_lower or "suma" in name_lower:
+        if any(keyword in name_lower for keyword in ["razem", "w tym", "suma", "dostawca", "odbiorca", "nabywca", "sprzedawca"]):
             continue
             
         logging.info(f"Processing line: {line}")
         
         # Извлекаем все числа из части строки после названия товара
         rest_of_line = " ".join(rest_parts)
-        # Убираем знак процента, чтобы он не мешал парсить НДС
-        rest_cleaned = rest_of_line.replace("%", " ")
-        
-        nums = []
-        for p in rest_cleaned.split():
-            # Ищем числовой паттерн
-            match = re.search(r'(\d+[\.,]?\d*)', p)
-            if match:
-                try:
-                    val = float(match.group(1).replace(",", "."))
-                    nums.append(val)
-                except ValueError:
-                    continue
+        nums = _extract_invoice_row_numbers(rest_of_line)
                     
-        # У нас должно быть минимум 5 чисел: Количество, Cena netto, Wartość netto, Kwota VAT, Wartość brutto
-        # (Иногда Stawka VAT 23.0 тоже распознается как число, тогда их 6)
-        if len(nums) >= 5:
-            # Последние 4 числа всегда: Wartość netto, [Stawka VAT], Kwota VAT, Wartość brutto
-            # Но Stawka VAT может отсутствовать если OCR её не прочитал как число
-            # Проще брать с конца:
+        # У нас должно быть минимум 4 числа (если кол-во или НДС пропущены)
+        if len(nums) >= 4:
             brutto = nums[-1]
             vat_kwota = nums[-2]
             
-            # Проверяем, есть ли ставка НДС (например 23.0 или 8.0) перед kwota VAT
-            if 0 <= nums[-3] <= 100 and len(nums) >= 6:
-                vat_rate = nums[-3] / 100.0
-                netto_wartosc = nums[-4]
-                netto_cena = nums[-5]
-                qty = nums[-6]
-            else:
-                vat_rate = 0.23 # fallback
-                netto_wartosc = nums[-3]
-                netto_cena = nums[-4]
-                qty = nums[-5]
+            # Проверяем, есть ли ставка НДС перед kwota VAT
+            if len(nums) >= 6:
+                if 0 <= nums[-3] <= 100:
+                    vat_rate = nums[-3] / 100.0
+                    netto_wartosc = nums[-4]
+                    netto_cena = nums[-5]
+                    qty = nums[-6]
+                else:
+                    vat_rate = 0.23
+                    netto_wartosc = nums[-3]
+                    netto_cena = nums[-4]
+                    qty = nums[-5]
+            elif len(nums) == 5:
+                if 0 <= nums[-3] <= 100:
+                    vat_rate = nums[-3] / 100.0
+                    netto_wartosc = nums[-4]
+                    netto_cena = nums[-5]
+                    qty = round(netto_wartosc / netto_cena, 2) if netto_cena > 0 else 1.0
+                else:
+                    vat_rate = 0.23
+                    netto_wartosc = nums[-3]
+                    netto_cena = nums[-4]
+                    qty = nums[-5]
+            else: # len(nums) == 4
+                if 0 <= nums[-3] <= 100:
+                    vat_rate = nums[-3] / 100.0
+                    netto_cena = nums[-4]
+                else:
+                    vat_rate = 0.23
+                    netto_cena = nums[-3]
+                netto_wartosc = brutto - vat_kwota
+                qty = round(netto_wartosc / netto_cena, 2) if netto_cena > 0 else 1.0
                 
-            # Пользовательская логика:
             # Цена закупки = Cena netto + VAT
             unit_price = round(netto_cena * (1 + vat_rate), 2)
-            
             name = _clean_product_name_robust(name)
             
+            if len(name) < 2:
+                continue
+            
+            raw_items.append(
+                InvoiceItem(
+                    name=name,
+                    quantity=qty,
+                    unit_price=unit_price,
+                    total_price=brutto
+                )
+            )
+            
+    return raw_items
+
+
+def _parse_jurpol_items(text: str) -> list:
+    """
+    Специализированный парсер для фактур JURPOL.
+    """
+    import logging
+    with open("jurpol_raw.txt", "w", encoding="utf-8") as f:
+        f.write(text)
+    
+    lines = text.split("\n")
+    cleaned_lines = [l.strip() for l in lines if l.strip()]
+
+    raw_items = []
+    
+    for line in cleaned_lines:
+        parts = [p.strip() for p in re.split(r"\t|\|", line) if p.strip()]
+        
+        if len(parts) < 3:
+            continue
+            
+        # Проверяем, является ли первый элемент номером строки (Lp.)
+        # Номер строки может содержать мусорные знаки типа | или !, очистим их для проверки.
+        match = re.match(r"^(\d+)\s*(?:[|!]\s*)?", parts[0])
+        if match:
+            lp_val = int(match.group(1))
+            if 1 <= lp_val <= 100:
+                name_part = parts[0][match.end():].strip()
+                if name_part:
+                    name = name_part
+                    rest_parts = parts[1:]
+                else:
+                    name = parts[1]
+                    rest_parts = parts[2:]
+            else:
+                name = parts[0]
+                rest_parts = parts[1:]
+        else:
+            name = parts[0]
+            rest_parts = parts[1:]
+            
+        # Исключаем строки итогов
+        name_lower = name.lower()
+        if any(keyword in name_lower for keyword in ["razem", "w tym", "suma", "dostawca", "odbiorca", "nabywca", "sprzedawca"]):
+            continue
+            
+        logging.info(f"Processing line: {line}")
+        
+        # Извлекаем все числа из части строки после названия товара
+        rest_of_line = " ".join(rest_parts)
+        nums = _extract_invoice_row_numbers(rest_of_line)
+                    
+        # У нас должно быть минимум 4 числа
+        if len(nums) >= 4:
+            brutto = nums[-1]
+            vat_kwota = nums[-2]
+            
+            # Различные сценарии в зависимости от количества распознанных чисел
+            if len(nums) >= 6:
+                if 0 <= nums[-3] <= 100:
+                    vat_rate = nums[-3] / 100.0
+                    netto_wartosc = nums[-4]
+                    netto_cena = nums[-5]
+                    qty = nums[-6]
+                else:
+                    vat_rate = 0.23
+                    netto_wartosc = nums[-3]
+                    netto_cena = nums[-4]
+                    qty = nums[-5]
+            elif len(nums) == 5:
+                if 0 <= nums[-3] <= 100:
+                    vat_rate = nums[-3] / 100.0
+                    netto_wartosc = nums[-4]
+                    netto_cena = nums[-5]
+                    qty = round(netto_wartosc / netto_cena, 2) if netto_cena > 0 else 1.0
+                else:
+                    vat_rate = 0.23
+                    netto_wartosc = nums[-3]
+                    netto_cena = nums[-4]
+                    qty = nums[-5]
+            else: # len(nums) == 4
+                if 0 <= nums[-3] <= 100:
+                    vat_rate = nums[-3] / 100.0
+                    netto_cena = nums[-4]
+                else:
+                    vat_rate = 0.23
+                    netto_cena = nums[-3]
+                netto_wartosc = brutto - vat_kwota
+                qty = round(netto_wartosc / netto_cena, 2) if netto_cena > 0 else 1.0
+                
+            # Цена закупки = Cena netto + VAT
+            unit_price = round(netto_cena * (1 + vat_rate), 2)
+            name = _clean_product_name_robust(name)
+            
+            if len(name) < 2:
+                continue
+                
             raw_items.append(
                 InvoiceItem(
                     name=name,
