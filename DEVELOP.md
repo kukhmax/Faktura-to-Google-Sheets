@@ -508,5 +508,20 @@
 - Интегрирован вызов нового парсера в `_extract_items`.
 
 ### Файлы:
-- [text_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/text_parser.py) — добавлена логика `_parse_alexis_items`, обновлены `_extract_seller` и `_extract_items`.
+- [text_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/text_parser.py) — добавлена логика `_parse_alexis_items`, обновлены `_extract_seller` and `_extract_items`.
+
+
+## Шаг 29: Интерактивный выбор парсера фирмы в Telegram-боте (2026-06-05)
+
+### Что сделано:
+- Добавлен интерфейс выбора конкретной фирмы/парсера при нажатии на кнопку "📸 Загрузить фактуру".
+- Бот отправляет Inline-клавиатуру со списком доступных парсеров: `ALEXIS`, `JURPOL`, `NATURAL`, `Stoklasa`, `GAIA`, а также опцию `Ни одна из них (Авто)` для автоматического распознавания.
+- После выбора пользователем конкретного парсера, это предпочтение сохраняется в контексте пользователя (`context.user_data["force_seller"]`), а inline-сообщение редактируется с подтверждением выбора.
+- Модифицирован метод `parse_invoice_text` в `text_parser.py`: теперь он поддерживает необязательный параметр `force_seller`, принудительно переопределяющий автоматическое распознавание продавца.
+- После обработки документа принудительный выбор сбрасывается для корректной последующей работы.
+
+### Файлы:
+- [bot.py](file:///c:/Users/m-win/Projects/faktura_bot/bot.py) — добавлен inline-выбор, callback-обработчик и обновление логики отправки документов.
+- [text_parser.py](file:///c:/Users/m-win/Projects/faktura_bot/text_parser.py) — обновлен метод `parse_invoice_text`.
+
 

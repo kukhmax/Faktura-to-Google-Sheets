@@ -53,12 +53,13 @@ class InvoiceData:
         return sum(item.total_price for item in self.items)
 
 
-def parse_invoice_text(text: str) -> InvoiceData:
+def parse_invoice_text(text: str, force_seller: str = None) -> InvoiceData:
     """
     Парсит OCR-текст фактуры и извлекает данные.
 
     Args:
         text: Текст, извлечённый из фактуры через OCR.
+        force_seller: Принудительно заданный продавец (пропускает автоопределение).
 
     Returns:
         InvoiceData с извлечёнными данными.
@@ -68,8 +69,14 @@ def parse_invoice_text(text: str) -> InvoiceData:
     # Извлекаем дату
     invoice.date = _extract_date(text)
 
-    # Извлекаем продавца (dostawca/sprzedawca)
-    invoice.seller = _extract_seller(text)
+    # Извлекаем продавца (dostawca/sprzedawca) или используем принудительный
+    if force_seller and force_seller != "AUTO":
+        if force_seller == "GAIA":
+            invoice.seller = '"GAIA" Sp. z o.o.'
+        else:
+            invoice.seller = force_seller
+    else:
+        invoice.seller = _extract_seller(text)
 
     # Извлекаем номер фактуры
     invoice.invoice_number = _extract_invoice_number(text, invoice.seller)
@@ -78,7 +85,7 @@ def parse_invoice_text(text: str) -> InvoiceData:
     invoice.items = _extract_items(text, invoice.seller)
 
     logger.info(
-        f"Парсинг завершён: продавец='{invoice.seller}', дата='{invoice.date}', "
+        f"Парсинг завершён: продавец='{invoice.seller}' (force={force_seller}), дата='{invoice.date}', "
         f"номер='{invoice.invoice_number}', "
         f"товаров={len(invoice.items)}"
     )

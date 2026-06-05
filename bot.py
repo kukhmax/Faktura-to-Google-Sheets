@@ -337,6 +337,32 @@ async def cancel_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def select_seller_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback-обработчик для выбора конкретной фирмы/парсера."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Получаем выбранную фирму
+    seller = query.data.split(":", 1)[1]
+    
+    # Сохраняем в context.user_data
+    context.user_data["force_seller"] = seller
+    
+    if seller == "AUTO":
+        seller_name = "Автоопределение (стандартный поиск)"
+    elif seller == "GAIA":
+        seller_name = '"GAIA" Sp. z o.o.'
+    else:
+        seller_name = seller
+        
+    await query.edit_message_text(
+        f"✅ **Выбран парсер для фирмы: {seller_name}**\n\n"
+        "📸 Пожалуйста, отправьте фото или PDF-файл вашей фактуры.\n"
+        "Я обработаю её с использованием выбранного парсера.",
+        parse_mode="Markdown"
+    )
+
+
 # --- Раздел обработки файлов (фото и PDF) ---
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -407,7 +433,11 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_message.edit_text(
             "⏳ **Текст распознан!** Начинаю парсинг и поиск товаров..."
         )
-        invoice_data = text_parser.parse_invoice_text(ocr_result["text"])
+        force_seller = context.user_data.get("force_seller")
+        invoice_data = text_parser.parse_invoice_text(ocr_result["text"], force_seller=force_seller)
+        
+        # Сбрасываем принудительный парсер
+        context.user_data.pop("force_seller", None)
         
         if not invoice_data.is_valid:
             await status_message.edit_text(
@@ -492,6 +522,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
     except Exception as e:
+        context.user_data.pop("force_seller", None)
         logger.error(f"Критическая ошибка обработки файла: {e}", exc_info=True)
         await status_message.edit_text(
             f"❌ **Критическая ошибка обработки:**\n`{str(e)}`",
@@ -504,13 +535,27 @@ async def text_message_router(update: Update, context: ContextTypes.DEFAULT_TYPE
     text = update.message.text
     
     if text == "📸 Загрузить фактуру":
+        keyboard = [
+            [
+                InlineKeyboardButton("ALEXIS", callback_data="select_seller:ALEXIS"),
+                InlineKeyboardButton("JURPOL", callback_data="select_seller:JURPOL")
+            ],
+            [
+                InlineKeyboardButton("NATURAL", callback_data="select_seller:NATURAL"),
+                InlineKeyboardButton("Stoklasa", callback_data="select_seller:Stoklasa")
+            ],
+            [
+                InlineKeyboardButton('"GAIA" Sp. z o.o.', callback_data="select_seller:GAIA"),
+                InlineKeyboardButton("Ни одна из них (Авто)", callback_data="select_seller:AUTO")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
-            "📸 **Загрузка фактуры**\n\n"
-            "Просто отправьте мне фото вашей фактуры (как обычное изображение) "
-            "или PDF-файл в этот чат.\n\n"
-            "Я автоматически распознаю польский текст, извлеку товары, "
-            "рассчитаю розничные цены и запишу их в вашу Google Таблицу!",
-            parse_mode="Markdown"
+            "🏢 **Выбор фирмы/парсера**\n\n"
+            "Пожалуйста, выберите фирму, фактуру которой вы хотите загрузить:\n"
+            "(Если нужной фирмы нет в списке, выберите **Ни одна из них**)",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
         )
     elif text == "📊 Открыть таблицу":
         await open_table_command(update, context)
@@ -563,6 +608,9 @@ def main():
         allow_reentry=True
     )
     app.add_handler(settings_conv)
+
+    # Обработчик выбора конкретного парсера фирмы
+    app.add_handler(CallbackQueryHandler(select_seller_callback, pattern="^select_seller:"))
 
     # Стандартные команды
     app.add_handler(CommandHandler("start", start_command))
