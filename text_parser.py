@@ -246,6 +246,16 @@ def _extract_items(text: str, seller: str = "-") -> list:
         except Exception as e:
             logger.error(f"Ошибка парсинга JURPOL: {e}")
 
+    # 1.7 Если продавец ALEXIS, используем специализированный парсер
+    if seller and "alexis" in seller.lower():
+        try:
+            items = _parse_alexis_items(text)
+            if items:
+                logger.info(f"Успешно извлечено {len(items)} товаров с помощью парсера ALEXIS.")
+                return items
+        except Exception as e:
+            logger.error(f"Ошибка парсинга ALEXIS: {e}")
+
     # 2. Пробуем интеллектуальный парсер
     try:
         items = _parse_table_code_and_tab_aware(text)
@@ -991,6 +1001,10 @@ def _extract_seller(text: str) -> str:
     if "jurpol" in text_lower or "gąsiorek" in text_lower or "gasiorek" in text_lower or "7251086439" in text_lower:
         return "JURPOL"
         
+    # 4. Проверяем на ALEXIS
+    if "alexis" in text_lower or "mikucki" in text_lower or "524-020-26-22" in text_lower or "5240202622" in text_lower:
+        return "ALEXIS"
+        
     # 3. Дефолтный или пытаемся извлечь из "Sprzedawca:"
     sprzedawca_patterns = [
         r"Sprzedawca[:\s]+([^\n\t|]+)",
@@ -1133,6 +1147,160 @@ def _parse_natural_items(text: str) -> list:
             if len(name) < 2:
                 continue
             
+            raw_items.append(
+                InvoiceItem(
+                    name=name,
+                    quantity=qty,
+                    unit_price=unit_price,
+                    total_price=brutto
+                )
+            )
+            
+    return raw_items
+
+
+def _parse_alexis_items(text: str) -> list:
+    """
+    Специализированный парсер для фактур ALEXIS.
+    Учитывает возможный сдвиг строк (когда название на одной строке, а числа сдвинуты).
+    """
+    with open("alexis_raw.txt", "w", encoding="utf-8") as f:
+        f.write(text)
+        
+    lines = text.split("\n")
+    cleaned_lines = [l.strip() for l in lines if l.strip()]
+    
+    # Находим границы таблицы товаров
+    start_idx = None
+    end_idx = None
+    
+    for idx, line in enumerate(cleaned_lines):
+        line_lower = line.lower()
+        if "symbol / cn / pkwiu" in line_lower:
+            start_idx = idx + 1
+        elif "wartość w grupach vat" in line_lower or "razem wartość" in line_lower:
+            end_idx = idx
+            break
+            
+    if start_idx is None:
+        # Пытаемся найти начало по ключевым словам
+        for idx, line in enumerate(cleaned_lines):
+            line_lower = line.lower()
+            if "tkanina" in line_lower and ("tipo" in line_lower or "tip0" in line_lower):
+                start_idx = idx
+                break
+                
+    if start_idx is None:
+        return []
+        
+    if end_idx is None or end_idx <= start_idx:
+        # Если конец не нашли, берем 15 строк после начала
+        end_idx = min(start_idx + 15, len(cleaned_lines))
+        
+    table_lines = cleaned_lines[start_idx:end_idx]
+    
+    # Извлекаем названия и блоки чисел
+    names = []
+    num_blocks = []
+    
+    for line in table_lines:
+        code_match = re.search(r"\b(TIP[O0]?\d+)\b", line, re.IGNORECASE)
+        if code_match:
+            parts = line.split(code_match.group(1), 1)
+            after_code = parts[1]
+            parts_after = [p.strip() for p in re.split(r"\t|\|", after_code) if p.strip()]
+            if parts_after:
+                names.append(parts_after[0])
+                num_blocks.append(parts_after[1:])
+            else:
+                names.append("")
+                num_blocks.append([])
+        else:
+            parts = [p.strip() for p in re.split(r"\t|\|", line) if p.strip()]
+            names.append(None)
+            num_blocks.append(parts)
+            
+    if not names:
+        return []
+        
+    # Проверяем сдвиг: если на первой строке нет названия (None), а на последней строке нет чисел (пустой массив)
+    if names[0] is None and len(num_blocks[-1]) == 0:
+        aligned_names = [n for n in names if n is not None]
+        aligned_num_blocks = [nb for nb in num_blocks if len(nb) > 0]
+    else:
+        aligned_names = [n for n in names if n is not None]
+        aligned_num_blocks = [nb for n, nb in zip(names, num_blocks) if n is not None]
+        
+    raw_items = []
+    
+    for name, block in zip(aligned_names, aligned_num_blocks):
+        rest_of_line = " ".join(block)
+        nums = _extract_invoice_row_numbers(rest_of_line)
+        
+        if len(nums) >= 3:
+            if len(nums) >= 7:
+                brutto = nums[-1]
+                vat_kwota = nums[-2]
+                if 0 <= nums[-3] <= 100:
+                    vat_rate = nums[-3] / 100.0
+                    netto_wartosc = nums[-4]
+                    netto_cena = nums[-5]
+                    qty = nums[-7]
+                else:
+                    vat_rate = 0.23
+                    netto_wartosc = nums[-3]
+                    netto_cena = nums[-4]
+                    qty = nums[-5]
+            elif len(nums) == 6:
+                brutto = nums[-1]
+                vat_kwota = nums[-2]
+                if 0 <= nums[-3] <= 100:
+                    vat_rate = nums[-3] / 100.0
+                    netto_wartosc = nums[-4]
+                    netto_cena = nums[-5]
+                    qty = nums[-6]
+                else:
+                    vat_rate = 0.23
+                    netto_wartosc = nums[-3]
+                    netto_cena = nums[-4]
+                    qty = nums[-5]
+            elif len(nums) == 5:
+                brutto = nums[-1]
+                vat_kwota = nums[-2]
+                if 0 <= nums[-3] <= 100:
+                    vat_rate = nums[-3] / 100.0
+                    netto_wartosc = nums[-4]
+                    netto_cena = nums[-5]
+                    qty = round(netto_wartosc / netto_cena, 2) if netto_cena > 0 else 1.0
+                else:
+                    vat_rate = 0.23
+                    netto_wartosc = nums[-3]
+                    netto_cena = nums[-4]
+                    qty = nums[-5]
+            elif len(nums) == 4:
+                brutto = nums[-1]
+                vat_kwota = nums[-2]
+                if 0 <= nums[-3] <= 100:
+                    vat_rate = nums[-3] / 100.0
+                    netto_cena = nums[-4]
+                else:
+                    vat_rate = 0.23
+                    netto_cena = nums[-3]
+                netto_wartosc = brutto - vat_kwota
+                qty = round(netto_wartosc / netto_cena, 2) if netto_cena > 0 else 1.0
+            else: # len(nums) == 3
+                vat_rate = 0.23
+                netto_cena = nums[-1]
+                qty = nums[-3]
+                netto_wartosc = qty * netto_cena
+                brutto = round(netto_wartosc * 1.23, 2)
+                
+            unit_price = round(netto_cena * (1 + vat_rate), 2)
+            name = _clean_product_name_robust(name)
+            
+            if len(name) < 2:
+                continue
+                
             raw_items.append(
                 InvoiceItem(
                     name=name,
